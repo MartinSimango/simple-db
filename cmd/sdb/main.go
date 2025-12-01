@@ -22,7 +22,6 @@ func main() {
 		go func(c net.Conn) {
 			defer c.Close()
 			fmt.Println("Handling client: ", c.RemoteAddr())
-			// for
 		}(conn)
 	}
 }
