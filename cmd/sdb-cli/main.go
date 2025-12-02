@@ -1,10 +1,10 @@
 package main
 
 import (
-	"github.com/MartinSimango/simple-db/pkg/cmd"
-	del "github.com/MartinSimango/simple-db/pkg/cmd/delete"
-	"github.com/MartinSimango/simple-db/pkg/cmd/get"
-	"github.com/MartinSimango/simple-db/pkg/cmd/put"
+	"github.com/MartinSimango/simple-db/internal/cmd"
+	del "github.com/MartinSimango/simple-db/internal/cmd/delete"
+	"github.com/MartinSimango/simple-db/internal/cmd/get"
+	"github.com/MartinSimango/simple-db/internal/cmd/put"
 )
 
 func main() {

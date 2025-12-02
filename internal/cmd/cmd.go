@@ -16,7 +16,3 @@ func NewSimpleDbCmd() *cobra.Command {
 	cmd.PersistentFlags().IntP("port", "p", 5050, "Server port number")
 	return cmd
 }
-
-func init() {
-
-}

@@ -1,19 +1,19 @@
 /*
 Copyright © 2025 Martin Simango shukomango@gmail.com
 */
-package put
+package del
 
 import (
 	"fmt"
 
-	"github.com/MartinSimango/simple-db/pkg/cmd/util"
+	"github.com/MartinSimango/simple-db/internal/cmd/util"
 	"github.com/spf13/cobra"
 )
 
-func NewPutCmd() *cobra.Command {
-	putCmd := &cobra.Command{
-		Use:   "put",
-		Short: "Add or update a key-value pair in the database",
+func NewDeleteCmd() *cobra.Command {
+	deleteCmd := &cobra.Command{
+		Use:   "delete",
+		Short: "Delete a key-value pair from the database",
 		Run: func(cmd *cobra.Command, args []string) {
 
 			conn, err := util.ConnectToServer(cmd.Flags())
@@ -25,5 +25,5 @@ func NewPutCmd() *cobra.Command {
 		},
 	}
 
-	return putCmd
+	return deleteCmd
 }
