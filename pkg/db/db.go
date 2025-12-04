@@ -40,6 +40,11 @@ func NewSimpleDb(address string) (*SimpleDb, error) {
 
 func (db *SimpleDb) Start() error {
 	var err error
+	r, err := db.wal.readRecords()
+	fmt.Println("Recovered WAL records: ", len(r), err)
+	// for _, rec := range r {
+	// 	slog.Info("Recovered WAL record", "type", rec.RecordType, "key", rec.Key, "value", *rec.Value)
+	// }
 	db.listener, err = net.Listen("tcp", db.address)
 	if err != nil {
 		return err
@@ -48,26 +53,21 @@ func (db *SimpleDb) Start() error {
 	for {
 		conn, err := db.listener.Accept()
 		if err != nil {
-			fmt.Println("Error accepting: ", err.Error())
+			slog.Error("Error accepting: ", "error", err)
 			continue
 		}
 
 		go func(c net.Conn) {
 			defer c.Close()
-			slog.Debug("Handling client: ", "Addr", c.RemoteAddr())
-			data := make([]byte, 1024) // 1KB buffer
+			data := make([]byte, 4096) // 4KB buffer #TODO
 			n, err := conn.Read(data)
 			if err != nil {
-				slog.Error("Error reading from connection: ", "error", err)
 				return
 			}
-
-			slog.Info("Received payload", "Addr", c.RemoteAddr(), "payload", slog.StringValue(string(data[:n])))
-
 			scanner := bufio.NewScanner(bytes.NewReader(data[:n]))
 
-			buf := make([]byte, 0, 1024) // 1KB buffer
-			scanner.Buffer(buf, 1024)
+			buf := make([]byte, 0, 4096) // 1KB buffer
+			scanner.Buffer(buf, 4096)
 			if !scanner.Scan() {
 				slog.Warn("No data received")
 				return
@@ -94,41 +94,20 @@ func (db *SimpleDb) Start() error {
 			}
 
 			bytesRead := len(operation) + 1 + len(keyHeader) + 1 + len(lengthHeader) + 1
-			payload := string(data[bytesRead : bytesRead+payloadLen])
-			slog.Info("Payload extracted", "payload", payload)
+			value := string(data[bytesRead : bytesRead+payloadLen])
 
-			var operationErr error
-			switch operation {
-			case PUT:
-				slog.Debug("Processing PUT")
-				operationErr = db.Put(key, payload)
-			case GET:
-				slog.Debug("Processing GET")
-				_, operationErr = db.Get(key)
-			case DELETE:
-				slog.Debug("Processing DELETE")
-				operationErr = db.Delete(key)
-			default:
-				slog.Warn("Unknown operation", "operation", operation)
-			}
-
-			if operationErr != nil {
-				conn.Write([]byte("ERROR: " + operationErr.Error()))
-			} else {
-				conn.Write([]byte("OK"))
-			}
+			db.handleOperation(conn, operation, key, value)
 
 		}(conn)
 	}
 }
 
 func (db *SimpleDb) Stop(ctx context.Context) error {
-	db.wal.close()
-
-	return nil
+	return db.wal.close()
 }
 
 func (db *SimpleDb) Put(key, value string) error {
+
 	// Placeholder implementation
 	record := &WalRecord{
 		RecordType: RecordTypePut,
@@ -166,4 +145,32 @@ func (db *SimpleDb) Delete(key string) error {
 	}
 
 	return nil
+}
+
+func (db *SimpleDb) handleOperation(conn net.Conn, operation, key, payload string) {
+	var value string
+	var err error
+
+	switch operation {
+	case PUT:
+		err = db.Put(key, payload)
+	case GET:
+		value, err = db.Get(key)
+	case DELETE:
+		err = db.Delete(key)
+	default:
+		err = fmt.Errorf("unknown operation: %s", operation)
+	}
+
+	if err != nil {
+		conn.Write([]byte("ERROR: " + err.Error()))
+		return
+	}
+
+	switch operation {
+	case GET:
+		conn.Write([]byte(value))
+	default:
+		conn.Write([]byte("OK"))
+	}
 }

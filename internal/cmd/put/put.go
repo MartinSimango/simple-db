@@ -31,8 +31,6 @@ Arguments:
 			if err != nil {
 				panic(err)
 			}
-			slog.InfoContext(cmd.Context(), "Connected to server from: ", "address", conn.RemoteAddr())
-
 			defer conn.Close()
 			conn.Write(putMessage(args[0], args[1]))
 			buf := make([]byte, 1024)
@@ -42,7 +40,6 @@ Arguments:
 				return
 			}
 			fmt.Println(string(buf[:n]))
-			// conn.Read() // read server response
 		},
 	}
 

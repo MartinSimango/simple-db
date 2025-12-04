@@ -3,6 +3,7 @@ package db
 
 import (
 	"encoding/binary"
+	"sync"
 
 	"google.golang.org/protobuf/proto"
 
@@ -13,6 +14,7 @@ import (
 
 type walFile struct {
 	file *os.File
+	mu   sync.Mutex
 }
 
 const (
@@ -45,14 +47,15 @@ func newWalFile() (*walFile, error) {
 }
 
 func (w *walFile) writeRecord(record *WalRecord) error {
-
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	// make size of record is 2^16 bytes - 65536 bytes - limit set by simpledb
 	if err := binary.Write(w.file, binary.LittleEndian, uint16(proto.Size(record))); err != nil {
 		return err
 	}
 	bytes, err := proto.Marshal(record)
 	if err != nil {
-		return err // now file is corrupted as size is written but data is not - remediate this
+		return err // TODO: now file is corrupted as size is written but data is not - remediate this
 	}
 	_, err = w.file.Write(bytes)
 	if err != nil {
@@ -68,7 +71,9 @@ func (w *walFile) readRecords() ([]*WalRecord, error) {
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
-	buf := make([]byte, 1<<16)
+
+	buf := make([]byte, 1<<16) // 65536 bytes
+	// TODO: compare if making a fixed buffer vs allocating every time is better
 	for {
 		var record WalRecord
 
@@ -78,6 +83,9 @@ func (w *walFile) readRecords() ([]*WalRecord, error) {
 				break
 			}
 			return nil, err
+		}
+		if size == 0 {
+			break
 		}
 		_, err := w.file.Read(buf[:size])
 		if err != nil {
