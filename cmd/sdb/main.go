@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/MartinSimango/simple-db/internal/db"
+	"github.com/MartinSimango/simple-db/pkg/db"
 )
 
 func main() {
