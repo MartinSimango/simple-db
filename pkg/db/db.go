@@ -9,6 +9,8 @@ import (
 	"net"
 	"strconv"
 	"strings"
+
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -18,9 +20,12 @@ const (
 )
 
 type SimpleDb struct {
-	wal     *walFile
-	address string
+	wal      *walFile
+	address  string
+	listener net.Listener
 }
+
+const recordMaxSize = 1 << 16 // 65536 bytes
 
 func NewSimpleDb(address string) (*SimpleDb, error) {
 	wal, err := newWalFile()
@@ -34,13 +39,14 @@ func NewSimpleDb(address string) (*SimpleDb, error) {
 }
 
 func (db *SimpleDb) Start() error {
-	l, err := net.Listen("tcp", db.address)
+	var err error
+	db.listener, err = net.Listen("tcp", db.address)
 	if err != nil {
 		return err
 	}
 
 	for {
-		conn, err := l.Accept()
+		conn, err := db.listener.Accept()
 		if err != nil {
 			fmt.Println("Error accepting: ", err.Error())
 			continue
@@ -56,7 +62,6 @@ func (db *SimpleDb) Start() error {
 				return
 			}
 
-			//
 			slog.Info("Received payload", "Addr", c.RemoteAddr(), "payload", slog.StringValue(string(data[:n])))
 
 			scanner := bufio.NewScanner(bytes.NewReader(data[:n]))
@@ -118,27 +123,28 @@ func (db *SimpleDb) Start() error {
 }
 
 func (db *SimpleDb) Stop(ctx context.Context) error {
+	db.wal.close()
+
 	return nil
 }
 
 func (db *SimpleDb) Put(key, value string) error {
 	// Placeholder implementation
-	err := db.wal.writeRecord(walRecord{
+	record := &WalRecord{
 		RecordType: RecordTypePut,
 		Key:        key,
-		Value:      value,
-	})
+		Value:      &value,
+	}
+
+	if proto.Size(record) > recordMaxSize {
+		return fmt.Errorf("record size exceeds maximum limit of %d bytes", recordMaxSize)
+	}
+
+	err := db.wal.writeRecord(record)
 	if err != nil {
 		return err
 	}
 
-	records, err := db.wal.readRecords()
-	if err != nil {
-		return err
-	}
-	for _, record := range records {
-		slog.Info("WAL Record", "Type", record.RecordType, "Key", record.Key, "Value", record.Value)
-	}
 	return nil
 }
 
@@ -150,10 +156,10 @@ func (db *SimpleDb) Get(key string) (string, error) {
 }
 
 func (db *SimpleDb) Delete(key string) error {
-	err := db.wal.writeRecord(walRecord{
+	err := db.wal.writeRecord(&WalRecord{
 		RecordType: RecordTypeDelete,
 		Key:        key,
-		Value:      "TOMBSTONE",
+		Value:      nil,
 	})
 	if err != nil {
 		return err

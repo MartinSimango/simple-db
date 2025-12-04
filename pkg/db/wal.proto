@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package wal;
+option go_package = "./;db";
+
+
+// Represents the type of WAL record, similar to your RecordType enum.
+enum RecordType {
+    RECORD_TYPE_UNSPECIFIED = 0;
+    PUT = 1;
+    DELETE = 2;
+}
+
+// A single WAL entry.
+message WalRecord {
+    RecordType record_type = 1;
+    string  key = 2;
+    optional string value = 3; // empty for deletes
+}
