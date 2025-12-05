@@ -108,7 +108,7 @@ func (w *walFile) readRecords() ([]*WalRecord, error) {
 
 func (w *walFile) flush() {
 	// needs to wait for a channel message from memtable flush completion before truncating
-	for _ = range w.memTableCh {
+	for range w.memTableCh {
 		w.mu.Lock()
 		w.file.Sync()
 		w.file.Truncate(0)
@@ -119,5 +119,7 @@ func (w *walFile) flush() {
 }
 
 func (w *walFile) close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.file.Close()
 }

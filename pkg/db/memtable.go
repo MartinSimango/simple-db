@@ -36,7 +36,7 @@ func newMapMemTable() *mapMemTable {
 		table:   make(map[string]memTableData),
 		ch:      make(chan struct{}),
 		size:    0,
-		maxSize: 1 << 20, // 1KB for testing
+		maxSize: 1 << 20, // 1MB
 	}
 }
 
