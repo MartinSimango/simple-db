@@ -47,5 +47,5 @@ Arguments:
 }
 
 func putMessage(key, value string) []byte {
-	return []byte(fmt.Sprintf("PUT\nKEY: %s\nLENGTH: %d\n%s", key, len(value), value))
+	return []byte(fmt.Sprintf("PUT\nKey: %s\nLength: %d\n\n%s", key, len(value), value))
 }

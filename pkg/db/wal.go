@@ -13,8 +13,9 @@ import (
 )
 
 type walFile struct {
-	file *os.File
-	mu   sync.Mutex
+	file       *os.File
+	mu         sync.Mutex
+	memTableCh chan struct{}
 }
 
 const (
@@ -25,7 +26,7 @@ const (
 const simpleDbDir = ".simpledb"
 const walFileName = "wal.log"
 
-func newWalFile() (*walFile, error) {
+func newWalFile(ch chan struct{}) (*walFile, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -41,9 +42,12 @@ func newWalFile() (*walFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &walFile{
-		file: file,
-	}, nil
+	w := &walFile{
+		file:       file,
+		memTableCh: ch,
+	}
+	go w.flush() // concurrently flush WAL when memtable signals
+	return w, nil
 }
 
 func (w *walFile) writeRecord(record *WalRecord) error {
@@ -99,6 +103,18 @@ func (w *walFile) readRecords() ([]*WalRecord, error) {
 	}
 
 	return records, nil
+
+}
+
+func (w *walFile) flush() {
+	// needs to wait for a channel message from memtable flush completion before truncating
+	for _ = range w.memTableCh {
+		w.mu.Lock()
+		w.file.Sync()
+		w.file.Truncate(0)
+		w.file.Seek(0, io.SeekStart)
+		w.mu.Unlock()
+	}
 
 }
 

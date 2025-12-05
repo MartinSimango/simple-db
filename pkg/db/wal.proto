@@ -15,5 +15,5 @@ enum RecordType {
 message WalRecord {
     RecordType record_type = 1;
     string  key = 2;
-    optional string value = 3; // empty for deletes
+    string value = 3; // empty for deletes
 }
