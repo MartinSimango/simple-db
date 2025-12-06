@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -40,29 +41,45 @@ type SimpleDb struct {
 	address  string
 	listener net.Listener
 	memTable memTable
+	// we can only have one memTableSnapshot at a time because we have 1 wal file.
+	// If we had multiple wal files we could have multiple snapshots in flight
+	// TODO: add support for multiple snapshots if we have multiple wal files
+	// because each wal file corresponds to a memtable memTableSnapshot
+	// this will enable concurrent flushes meaning less blocking of writes
+	// and faster overall performance and throughput
+	memTableSnapshot memTable
+	// mutex to protect the snapshot during flush
+	mu sync.Mutex
 }
 
 const recordMaxSize = 1 << 16 // 65536 bytes - 64KB
 
-func NewSimpleDb(address string) (*SimpleDb, error) {
-	memTable := newMapMemTable()
+const simpleDbDir = ".simpledb"
+const walFileName = "wal.log"
+const sstTableDir = "sst"
 
-	wal, err := newWalFile(memTable.flushChannel())
+func NewSimpleDb(address string) (*SimpleDb, error) {
+
+	wal, err := newWalFile(simpleDbDir, walFileName)
 	if err != nil {
 		return nil, err
 	}
-	// TODO: memTable type must be configurable
-	return &SimpleDb{
-		wal:      wal,
-		address:  address,
-		memTable: memTable,
-	}, nil
+
+	sb := &SimpleDb{
+		wal:     wal,
+		address: address,
+	}
+	sb.memTable = newMapMemTable(sb.flushSnapshots)
+
+	return sb, nil
 }
 
 func (db *SimpleDb) Start() error {
 	var err error
 	r, err := db.wal.readRecords()
-
+	if err != nil {
+		return fmt.Errorf("failed to recover WAL records")
+	}
 	if l := len(r); l > 0 {
 		s := time.Now()
 		slog.Info("Recovering wal records", "record_count", l)
@@ -100,8 +117,6 @@ func (db *SimpleDb) Stop(ctx context.Context) error {
 }
 
 func (db *SimpleDb) Put(key, value string) error {
-	db.memTable.put(RecordTypePut, key, value)
-
 	// Placeholder implementation
 	record := &WalRecord{
 		RecordType: RecordTypePut,
@@ -117,6 +132,8 @@ func (db *SimpleDb) Put(key, value string) error {
 		return err
 	}
 
+	db.memTable.put(RecordTypePut, key, value)
+
 	return nil
 }
 
@@ -127,6 +144,13 @@ func (db *SimpleDb) Get(key string) (string, bool) {
 	value, found := db.memTable.get(key)
 	if found {
 		return value, true
+	}
+	// search snapshot if exists
+	if db.memTableSnapshot != nil {
+		value, found = db.memTableSnapshot.get(key)
+		if found {
+			return value, true
+		}
 	}
 	// search SSTables (not implemented)
 	return "", false
@@ -266,4 +290,41 @@ func (db *SimpleDb) handleOperation(conn net.Conn, operation Operation, headers 
 		conn.Write([]byte("ERROR: " + err.Error()))
 		return
 	}
+}
+
+func (db *SimpleDb) flushSnapshots() {
+	// need a mutex here to prevent multiple flushes at the same time
+	slog.Info("Memtable full, flushing to SSTable and truncating WAL")
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	// swap memtable with a new one
+	db.memTableSnapshot = db.memTable
+	db.memTable = newMapMemTable(db.flushSnapshots)
+
+	// Iterate through snapshot and write to sstable
+	fmt.Println(db.memTableSnapshot == nil)
+	iterator := db.memTableSnapshot.iterator()
+	k, v, ok := iterator.Next()
+
+	for ok {
+		// write to sstable
+		// fmt.Println("Writing to sstable with sorted keys", k, v)
+		_, _ = k, v
+		k, v, ok = iterator.Next()
+	}
+
+	// create sstable from current memtable data
+	// for now just clear the memtable
+	// have to sort the keys first too as map is unordered
+	// another reason why map is not ideal for memtable
+
+	// currently only observer is wal flush
+	// remove the snapshot as flush is complete
+	db.memTableSnapshot = nil
+	// now that sstable has been written to, truncate wal
+	// TODO: while the wal is being truncated, new writes will be blocked but the wal mutex
+	// reads to the db will still be allowed due to separate memtable snapshot
+	// optimize further by allowing writes to continue while truncating wal
+	// but this needs multiple wal files to be implemented first
+	go db.wal.truncate()
 }

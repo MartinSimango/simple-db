@@ -7,36 +7,77 @@ import (
 	"unsafe"
 )
 
+type iterator interface {
+	Next() (key string, value memTableValue, ok bool)
+}
+
+type mapMemTableIterator struct {
+	data  map[string]memTableValue
+	keys  []string
+	index int
+}
+
+func newMemTableIterator(data map[string]memTableValue) *mapMemTableIterator {
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys) // ensures consistency and also allows for easy write to sstable
+	return &mapMemTableIterator{
+		data:  data,
+		keys:  keys,
+		index: 0,
+	}
+}
+
+func (it *mapMemTableIterator) Next() (key string, value memTableValue, ok bool) {
+	if it.index >= len(it.keys) {
+		return "", memTableValue{}, false
+	}
+
+	key = it.keys[it.index]
+	value = it.data[key]
+	it.index++
+	return key, value, true
+
+}
+
 type memTable interface {
 	put(recordType RecordType, key, value string)
 	get(key string) (string, bool)
 	getPrefix(prefix string) map[string]string
 	delete(key string) error
-	flushCount() int
-	flushChannel() chan struct{}
+	onFull(func())
+	iterator() iterator // snapshot-safe iterator
+
+	// functions to be called when memtable is flushed
 }
-type memTableData struct {
+type memTableValue struct {
 	recordType RecordType
 	value      string
+}
+
+type memTableData struct {
+	key string
+	memTableValue
 }
 
 // For now will be a binary tree but then wo
 type mapMemTable struct {
 	// Placeholder fields for MemTable structure
-	table   map[string]memTableData
+	table   map[string]memTableValue
 	mu      sync.RWMutex
-	ch      chan struct{}
 	size    uint32
 	maxSize uint32
-	fc      int
+	fn      func()
 }
 
-func newMapMemTable() *mapMemTable {
+func newMapMemTable(onFull func()) *mapMemTable {
 	return &mapMemTable{
-		table:   make(map[string]memTableData),
-		ch:      make(chan struct{}),
+		table:   make(map[string]memTableValue),
 		size:    0,
-		maxSize: 1 << 20, // 1MB
+		maxSize: 1 << 10, // 1MB
+		fn:      onFull,
 	}
 }
 
@@ -47,14 +88,12 @@ func (mt *mapMemTable) put(recordType RecordType, key, value string) {
 		// remove old size
 		mt.size -= uint32(len(key) + len(mt.table[key].value) + int(unsafe.Sizeof(mt.table[key].recordType)))
 	}
-	mt.table[key] = memTableData{recordType: recordType, value: value}
+	mt.table[key] = memTableValue{recordType: recordType, value: value}
 
 	mt.size += uint32(len(key) + len(value) + int(unsafe.Sizeof(recordType)))
 	if mt.size >= mt.maxSize {
-		// signal to flush
-		go mt.flush(mt.table)
-		mt.size = 0
-		mt.table = make(map[string]memTableData) // discard current table and start new one
+		// call onFull callback
+		go mt.fn()
 	}
 }
 
@@ -90,46 +129,19 @@ func (mt *mapMemTable) delete(key string) error {
 	if _, exists := mt.table[key]; !exists {
 		return nil
 	}
-	mt.table[key] = memTableData{recordType: RecordTypeDelete, value: ""}
+	mt.table[key] = memTableValue{recordType: RecordTypeDelete, value: ""}
 	return nil
 }
 
-func (mt *mapMemTable) flush(table map[string]memTableData) {
-	mt.mu.Lock()
-	defer mt.mu.Unlock()
-
-	sortedKeys := make([]string, 0, len(table))
-	for k := range table {
-		sortedKeys = append(sortedKeys, k)
-	}
-	// sort keys
-	slices.Sort(sortedKeys)
-	// simulate sstable creation
-	for _, k := range sortedKeys {
-		_ = table[k] // write the value to sstable too
-	}
-
-	// create sstable from current memtable data
-	// for now just clear the memtable
-	// have to sort the keys first too as map is unordered
-	// another reason why map is not ideal for memtable
-
-	mt.ch <- struct{}{}
-	mt.fc++
-
+func (mt *mapMemTable) onFull(fn func()) {
+	mt.fn = fn
 }
 
-func (mt *mapMemTable) flushChannel() chan struct{} {
-	return mt.ch
-}
+func (m *mapMemTable) iterator() iterator {
+	// no need to lock as we should be reading from a snapshot of the map
+	// but to be safe, we can use RLock
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return newMemTableIterator(m.table)
 
-func (mt *mapMemTable) flushCount() int {
-	mt.mu.RLock()
-	defer mt.mu.RUnlock()
-	return mt.fc
-}
-func (mt *mapMemTable) close() {
-	(&sync.Once{}).Do(func() {
-		close(mt.ch)
-	})
 }
