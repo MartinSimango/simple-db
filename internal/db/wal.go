@@ -12,7 +12,7 @@ import (
 	"os"
 )
 
-type walFile struct {
+type WalFile struct {
 	file *os.File
 	mu   sync.Mutex
 }
@@ -22,7 +22,7 @@ const (
 	RecordTypeDelete RecordType = 2
 )
 
-func newWalFile(simpleDbDir, walFileName string) (*walFile, error) {
+func NewWalFile(simpleDbDir, walFileName string) (*WalFile, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -38,13 +38,13 @@ func newWalFile(simpleDbDir, walFileName string) (*walFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	w := &walFile{
+	w := &WalFile{
 		file: file,
 	}
 	return w, nil
 }
 
-func (w *walFile) writeRecord(record *WalRecord) error {
+func (w *WalFile) WriteRecord(record *WalRecord) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	// make size of record is 2^16 bytes - 65536 bytes - limit set by simpledb
@@ -62,8 +62,7 @@ func (w *walFile) writeRecord(record *WalRecord) error {
 	return nil
 }
 
-// TODO: use to restore state
-func (w *walFile) readRecords() ([]*WalRecord, error) {
+func (w *WalFile) ReadRecords() ([]*WalRecord, error) {
 	var records []*WalRecord
 	// var buf bytes.Buffer
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
@@ -100,7 +99,7 @@ func (w *walFile) readRecords() ([]*WalRecord, error) {
 
 }
 
-func (w *walFile) truncate() {
+func (w *WalFile) Truncate() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.file.Sync()
@@ -108,7 +107,7 @@ func (w *walFile) truncate() {
 	w.file.Seek(0, io.SeekStart)
 }
 
-func (w *walFile) close() error {
+func (w *WalFile) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.file.Close()

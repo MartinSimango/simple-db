@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MartinSimango/simple-db/internal/db"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -36,20 +37,26 @@ const (
 	LENGTH_HEADER = "Length"
 )
 
+type Options struct {
+	Logger   *slog.Logger
+	LogLevel slog.Level
+}
+
 type SimpleDb struct {
-	wal      *walFile
+	wal      *db.WalFile
 	address  string
 	listener net.Listener
-	memTable memTable
+	memTable db.MemTable
 	// we can only have one memTableSnapshot at a time because we have 1 wal file.
 	// If we had multiple wal files we could have multiple snapshots in flight
 	// TODO: add support for multiple snapshots if we have multiple wal files
 	// because each wal file corresponds to a memtable memTableSnapshot
 	// this will enable concurrent flushes meaning less blocking of writes
 	// and faster overall performance and throughput
-	memTableSnapshot memTable
+	memTableSnapshot db.MemTable
 	// mutex to protect the snapshot during flush
-	mu sync.Mutex
+	mu     sync.Mutex
+	logger *slog.Logger
 }
 
 const recordMaxSize = 1 << 16 // 65536 bytes - 64KB
@@ -58,9 +65,28 @@ const simpleDbDir = ".simpledb"
 const walFileName = "wal.log"
 const sstTableDir = "sst"
 
+func NewSimpleWithOptions(address string, options Options) (*SimpleDb, error) {
+	sdb, err := NewSimpleDb(address)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: configure logger
+	// // set logger if provided
+	// if options.Logger != nil {
+	// 	sdb.logger = options.Logger
+	// }
+	// // set log level if provided
+	// if options.LogLevel != slog.Level(0) {
+	// 	sdb.logger.
+	// }
+
+	return sdb, nil
+
+}
 func NewSimpleDb(address string) (*SimpleDb, error) {
 
-	wal, err := newWalFile(simpleDbDir, walFileName)
+	wal, err := db.NewWalFile(simpleDbDir, walFileName)
 	if err != nil {
 		return nil, err
 	}
@@ -69,36 +95,45 @@ func NewSimpleDb(address string) (*SimpleDb, error) {
 		wal:     wal,
 		address: address,
 	}
-	sb.memTable = newMapMemTable(sb.flushSnapshots)
+	sb.memTable = db.NewMapMemTable(sb.flushSnapshots)
 
 	return sb, nil
 }
 
-func (db *SimpleDb) Start() error {
+func (sdb *SimpleDb) Start() error {
 	var err error
-	r, err := db.wal.readRecords()
+	records, err := sdb.wal.ReadRecords()
 	if err != nil {
 		return fmt.Errorf("failed to recover WAL records")
 	}
-	if l := len(r); l > 0 {
-		s := time.Now()
+
+	if l := len(records); l > 0 {
+		start := time.Now()
 		slog.Info("Recovering wal records", "record_count", l)
-		for _, record := range r {
-			db.memTable.put(record.RecordType, record.Key, record.Value)
+		r, ok := sdb.memTable.(db.Recoverable)
+		if ok {
+			r.SetRecoveryMode(true)
 		}
-		slog.Info("WAL recovery complete", "memtable_size", len(db.memTable.(*mapMemTable).table), "time", time.Since(s).String())
+		for _, record := range records {
+			sdb.memTable.Put(record.RecordType, record.Key, record.Value)
+		}
+		if ok {
+			r.SetRecoveryMode(false)
+		}
+		sdb.flushSnapshots() // flush recovered memtable to sstable
+		slog.Info("WAL recovery complete", "memtable_size", sdb.memTable.Size(), "time", time.Since(start).String())
 
 	} else {
 		slog.Info("No WAL records to recover")
 	}
 
-	db.listener, err = net.Listen("tcp", db.address)
+	sdb.listener, err = net.Listen("tcp", sdb.address)
 	if err != nil {
 		return err
 	}
 
 	for {
-		conn, err := db.listener.Accept()
+		conn, err := sdb.listener.Accept()
 		if err != nil {
 			slog.Error("Error accepting: ", "error", err)
 			continue
@@ -106,20 +141,20 @@ func (db *SimpleDb) Start() error {
 
 		go func(c net.Conn) {
 			defer c.Close()
-			db.handleConnection(c)
+			sdb.handleConnection(c)
 
 		}(conn)
 	}
 }
 
-func (db *SimpleDb) Stop(ctx context.Context) error {
-	return db.wal.close()
+func (sdb *SimpleDb) Stop(ctx context.Context) error {
+	return sdb.wal.Close()
 }
 
-func (db *SimpleDb) Put(key, value string) error {
+func (sdb *SimpleDb) Put(key, value string) error {
 	// Placeholder implementation
-	record := &WalRecord{
-		RecordType: RecordTypePut,
+	record := &db.WalRecord{
+		RecordType: db.RecordTypePut,
 		Key:        key,
 		Value:      value,
 	}
@@ -127,27 +162,27 @@ func (db *SimpleDb) Put(key, value string) error {
 	if proto.Size(record) > recordMaxSize {
 		return fmt.Errorf("record size exceeds maximum limit of %d bytes", recordMaxSize)
 	}
-	err := db.wal.writeRecord(record)
+	err := sdb.wal.WriteRecord(record)
 	if err != nil {
 		return err
 	}
 
-	db.memTable.put(RecordTypePut, key, value)
+	sdb.memTable.Put(db.RecordTypePut, key, value)
 
 	return nil
 }
 
-func (db *SimpleDb) Get(key string) (string, bool) {
+func (sdb *SimpleDb) Get(key string) (string, bool) {
 	// Placeholder implementation
 	// 1. Check mem table
 	// 2. If not found, check SSTables
-	value, found := db.memTable.get(key)
+	value, found := sdb.memTable.Get(key)
 	if found {
 		return value, true
 	}
 	// search snapshot if exists
-	if db.memTableSnapshot != nil {
-		value, found = db.memTableSnapshot.get(key)
+	if sdb.memTableSnapshot != nil {
+		value, found = sdb.memTableSnapshot.Get(key)
 		if found {
 			return value, true
 		}
@@ -156,9 +191,9 @@ func (db *SimpleDb) Get(key string) (string, bool) {
 	return "", false
 }
 
-func (db *SimpleDb) Delete(key string) error {
-	err := db.wal.writeRecord(&WalRecord{
-		RecordType: RecordTypeDelete,
+func (sdb *SimpleDb) Delete(key string) error {
+	err := sdb.wal.WriteRecord(&db.WalRecord{
+		RecordType: db.RecordTypeDelete,
 		Key:        key,
 		Value:      "",
 	})
@@ -166,7 +201,7 @@ func (db *SimpleDb) Delete(key string) error {
 		return err
 	}
 
-	err = db.memTable.delete(key)
+	err = sdb.memTable.Delete(key)
 	if err != nil {
 		return err
 	}
@@ -211,7 +246,7 @@ func readLine(r *bufio.Reader) (string, error) {
 	// Trim both \n and optional \r
 	return strings.TrimRight(line, "\r\n"), nil
 }
-func (db *SimpleDb) handleConnection(conn net.Conn) {
+func (sdb *SimpleDb) handleConnection(conn net.Conn) {
 
 	reader := bufio.NewReader(conn)
 	op, err := readLine(reader)
@@ -253,21 +288,23 @@ func (db *SimpleDb) handleConnection(conn net.Conn) {
 		return
 	}
 
-	db.handleOperation(conn, operation, headers, key, string(value))
+	sdb.handleOperation(conn, operation, headers, key, string(value))
 
 }
 
-func (db *SimpleDb) handleOperation(conn net.Conn, operation Operation, headers map[string]string, key, value string) {
+func (sdb *SimpleDb) handleOperation(conn net.Conn, operation Operation, headers map[string]string, key, value string) {
 	var err error
 	switch operation {
 	case PUT:
-		err = db.Put(key, value)
+		sdb.mu.Lock()
+		defer sdb.mu.Unlock()
+		err = sdb.Put(key, value)
 		if err == nil {
 			conn.Write([]byte(fmt.Sprintf("key '%s' updated", key)))
 		}
 
 	case GET:
-		v, found := db.Get(key)
+		v, found := sdb.Get(key)
 
 		if !found {
 			conn.Write([]byte("key not found"))
@@ -276,7 +313,9 @@ func (db *SimpleDb) handleOperation(conn net.Conn, operation Operation, headers 
 		}
 		return
 	case DELETE:
-		err = db.Delete(key)
+		sdb.mu.Lock()
+		defer sdb.mu.Unlock()
+		err = sdb.Delete(key)
 		if err == nil {
 			conn.Write([]byte("key deleted"))
 			return
@@ -292,18 +331,22 @@ func (db *SimpleDb) handleOperation(conn net.Conn, operation Operation, headers 
 	}
 }
 
-func (db *SimpleDb) flushSnapshots() {
+func (sdb *SimpleDb) flushSnapshots() {
 	// need a mutex here to prevent multiple flushes at the same time
 	slog.Info("Memtable full, flushing to SSTable and truncating WAL")
-	db.mu.Lock()
-	defer db.mu.Unlock()
+
+	sdb.mu.Lock()
+	defer sdb.mu.Unlock()
+
+	fmt.Printf("%p\n", sdb.memTable)
+
+	//
 	// swap memtable with a new one
-	db.memTableSnapshot = db.memTable
-	db.memTable = newMapMemTable(db.flushSnapshots)
+	sdb.memTableSnapshot = sdb.memTable
+	sdb.memTable = db.NewMapMemTable(sdb.flushSnapshots)
 
 	// Iterate through snapshot and write to sstable
-	fmt.Println(db.memTableSnapshot == nil)
-	iterator := db.memTableSnapshot.iterator()
+	iterator := sdb.memTableSnapshot.Iterator()
 	k, v, ok := iterator.Next()
 
 	for ok {
@@ -320,11 +363,13 @@ func (db *SimpleDb) flushSnapshots() {
 
 	// currently only observer is wal flush
 	// remove the snapshot as flush is complete
-	db.memTableSnapshot = nil
+	sdb.memTableSnapshot = nil
 	// now that sstable has been written to, truncate wal
 	// TODO: while the wal is being truncated, new writes will be blocked but the wal mutex
 	// reads to the db will still be allowed due to separate memtable snapshot
 	// optimize further by allowing writes to continue while truncating wal
 	// but this needs multiple wal files to be implemented first
-	go db.wal.truncate()
+	fmt.Println("Truncating WAL after flush")
+	time.Sleep(1 * time.Second)
+	go sdb.wal.Truncate()
 }

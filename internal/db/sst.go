@@ -39,7 +39,7 @@ func newSSTable() *ssTable {
 }
 
 // Write memtable data to SSTable and return the number of records written
-func (sst *ssTable) write([]memTableData) (uint32, error) {
+func (sst *ssTable) write([]MemTableData) (uint32, error) {
 
 	// algorithm:
 	// 1. Write a block of data- go the end of file
