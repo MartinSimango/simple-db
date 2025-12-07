@@ -369,7 +369,5 @@ func (sdb *SimpleDb) flushSnapshots() {
 	// reads to the db will still be allowed due to separate memtable snapshot
 	// optimize further by allowing writes to continue while truncating wal
 	// but this needs multiple wal files to be implemented first
-	fmt.Println("Truncating WAL after flush")
-	time.Sleep(1 * time.Second)
 	go sdb.wal.Truncate()
 }
