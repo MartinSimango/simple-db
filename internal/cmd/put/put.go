@@ -5,7 +5,6 @@ package put
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/MartinSimango/simple-db/internal/cmd/util"
 	"github.com/spf13/cobra"
@@ -23,20 +22,21 @@ Arguments:
 		Run: func(cmd *cobra.Command, args []string) {
 
 			if len(args) < 2 {
-				fmt.Println("Error: missing key")
+				fmt.Println("ERROR: missing key")
 				cmd.Usage()
 				return
 			}
 			conn, err := util.ConnectToServer(cmd.Flags())
 			if err != nil {
-				panic(err)
+				fmt.Println("ERROR: failed to connect to server:", err)
+				return
 			}
 			defer conn.Close()
 			conn.Write(putMessage(args[0], args[1]))
 			buf := make([]byte, 1024)
 			n, err := conn.Read(buf)
 			if err != nil {
-				slog.ErrorContext(cmd.Context(), "Failed to read server response", "error", err)
+				fmt.Println("ERROR: failed to read server response:", err)
 				return
 			}
 			fmt.Println(string(buf[:n]))

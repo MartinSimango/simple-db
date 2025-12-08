@@ -7,11 +7,6 @@ import (
 	"unsafe"
 )
 
-// FlushAware is implemented by MemTables that can notify when they are full.
-type FlushAware interface {
-	OnFull(func())
-}
-
 // Recoverable is implemented by MemTables that can be put into recovery mode.
 // In recovery mode, the MemTable should not trigger flushes or panic on writes if full.
 type Recoverable interface {
@@ -57,6 +52,8 @@ type MemTable interface {
 	Put(recordType RecordType, key, value string)
 	Get(key string) (string, bool)
 	GetPrefix(prefix string) map[string]string
+	// IsFull returns true if the memtable is full and cannot accept more writes
+	IsFull() bool
 	Delete(key string) error
 	// Size returns the current size of the memtable in bytes
 	Size() uint32
@@ -64,12 +61,12 @@ type MemTable interface {
 }
 
 type MemTableValue struct {
-	recordType RecordType
-	value      string
+	RecordType RecordType
+	Value      string
 }
 
 type MemTableData struct {
-	key string
+	Key string
 	MemTableValue
 }
 
@@ -80,45 +77,37 @@ type MapMemTable struct {
 	mu       sync.RWMutex
 	size     uint32
 	maxSize  uint32
-	fn       func()
-	isFull   bool
+	full     bool
 	recovery bool
 }
 
 var _ MemTable = (*MapMemTable)(nil)
-var _ FlushAware = (*MapMemTable)(nil)
 var _ Recoverable = (*MapMemTable)(nil)
 
-func NewMapMemTable(onFull func()) *MapMemTable {
+func NewMapMemTable() *MapMemTable {
 	return &MapMemTable{
 		table:   make(map[string]MemTableValue),
 		size:    0,
 		maxSize: 1 << 10, // 1MB
-		fn:      onFull,
-		isFull:  false,
+		full:    false,
 	}
 }
 
 func (mt *MapMemTable) Put(recordType RecordType, key, value string) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	if mt.isFull && !mt.recovery {
+	if mt.full && !mt.recovery {
 		panic("cannot write to a full memtable")
 	}
 	if _, exists := mt.table[key]; exists {
 		// remove old size
-		mt.size -= uint32(len(key) + len(mt.table[key].value) + int(unsafe.Sizeof(mt.table[key].recordType)))
+		mt.size -= uint32(len(key) + len(mt.table[key].Value) + int(unsafe.Sizeof(mt.table[key].RecordType)))
 	}
-	mt.table[key] = MemTableValue{recordType: recordType, value: value}
+	mt.table[key] = MemTableValue{RecordType: recordType, Value: value}
 
 	mt.size += uint32(len(key) + len(value) + int(unsafe.Sizeof(recordType)))
 	if mt.size >= mt.maxSize { // do not trigger onFull during recovery
-		mt.isFull = true
-		// call onFull callback
-		if mt.fn != nil && !mt.recovery {
-			go mt.fn()
-		}
-
+		mt.full = true
 	}
 }
 
@@ -126,10 +115,10 @@ func (mt *MapMemTable) Get(key string) (string, bool) {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	record, exists := mt.table[key]
-	if !exists || record.recordType == RecordTypeDelete {
+	if !exists || record.RecordType == RecordTypeDelete {
 		return "", false
 	}
-	return record.value, exists
+	return record.Value, exists
 }
 
 // This is why it's extremely inefficient to use a map as memtable for range queries
@@ -139,10 +128,10 @@ func (mt *MapMemTable) GetPrefix(prefix string) map[string]string {
 	result := make(map[string]string)
 	for k, v := range mt.table {
 		if strings.HasPrefix(k, prefix) {
-			if v.recordType == RecordTypeDelete {
+			if v.RecordType == RecordTypeDelete {
 				continue
 			}
-			result[k] = v.value
+			result[k] = v.Value
 		}
 	}
 	return result
@@ -154,12 +143,8 @@ func (mt *MapMemTable) Delete(key string) error {
 	if _, exists := mt.table[key]; !exists {
 		return nil
 	}
-	mt.table[key] = MemTableValue{recordType: RecordTypeDelete, value: ""}
+	mt.table[key] = MemTableValue{RecordType: RecordTypeDelete, Value: ""}
 	return nil
-}
-
-func (mt *MapMemTable) OnFull(fn func()) {
-	mt.fn = fn
 }
 
 // recoveryMode enables or disables recovery mode.
@@ -182,4 +167,10 @@ func (mt *MapMemTable) Size() uint32 {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	return mt.size
+}
+
+func (mt *MapMemTable) IsFull() bool {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.full
 }
