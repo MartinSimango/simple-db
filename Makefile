@@ -16,3 +16,7 @@ run-db-quick:
 
 run-client:
 	go run ./cmd/sdb-client/main.go put localhost "Hello, World!"
+
+
+build-db-test:
+	go build -o sdb-test cmd/sdb-test/main.go

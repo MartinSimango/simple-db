@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/MartinSimango/simple-db/internal/cmd/util"
+	"github.com/MartinSimango/simple-db/pkg/db"
 	"github.com/spf13/cobra"
 )
 
@@ -26,20 +27,23 @@ Arguments:
 				cmd.Usage()
 				return
 			}
-			conn, err := util.ConnectToServer(cmd.Flags())
+			address, err := util.GetAddress(cmd.Flags())
+			if err != nil {
+				fmt.Println("ERROR: invalid address:", err)
+				return
+			}
+			client, err := db.NewSimpleDbClient(address)
 			if err != nil {
 				fmt.Println("ERROR: failed to connect to server:", err)
 				return
 			}
-			defer conn.Close()
-			conn.Write(putMessage(args[0], args[1]))
-			buf := make([]byte, 1024)
-			n, err := conn.Read(buf)
+			defer client.Close()
+			r, err := client.Put(args[0], args[1])
 			if err != nil {
-				fmt.Println("ERROR: failed to read server response:", err)
+				fmt.Println("ERROR:", err)
 				return
 			}
-			fmt.Println(string(buf[:n]))
+			fmt.Println(r)
 		},
 	}
 

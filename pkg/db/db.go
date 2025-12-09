@@ -48,7 +48,14 @@ type SimpleDb struct {
 	listener net.Listener
 	memTable db.MemTable
 	// we can only have one memTableSnapshot at a time because we have 1 wal file.
-	// If we had multiple wal files we could have multiple snapshots in flight
+	// else we could accidentally truncate wal files for records or snapshots that are still need to be flushed
+	// so snapshot will have start and end wal file positions to know which wal files to truncate after flush
+	// this. Remember wal file corresponds to a memtable snapshot so truncating wal files means
+	// we have flushed that specific memtable snapshot. If more than one snapshot exists
+	// we need the wal file to know which snapshot it corresponds to.
+	// If we had multiple wal files we could have multiple snapshots in flight.
+	// As of now we will block writes when flushing snapshot to sstable
+	//
 	// TODO: add support for multiple snapshots if we have multiple wal files
 	// because each wal file corresponds to a memtable memTableSnapshot
 	// this will enable concurrent flushes meaning less blocking of writes
@@ -142,6 +149,8 @@ func (sdb *SimpleDb) Start() error {
 		}
 
 		go func(c net.Conn) {
+			// TODO: make the connections longer lived for multiple operations
+			// for now just handle one operation per connection
 			defer c.Close()
 			sdb.handleConnection(c)
 
@@ -156,18 +165,14 @@ func (sdb *SimpleDb) Stop(ctx context.Context) error {
 
 // checkMemTable checks if the memtable is full and triggers snapshot creation and flush if needed
 func (sdb *SimpleDb) checkMemTable() {
-	sdb.mu.Lock()
-	defer sdb.mu.Unlock()
 	if sdb.memTable.IsFull() {
 		if sdb.memTableSnapshot != nil {
-			panic("Snapshot already exists!")
-
+			panic("snapshot already exists")
 		}
 		sdb.memTableSnapshot = sdb.memTable
 		sdb.memTable = db.NewMapMemTable()
-		// in order to have a seperate goroutine for flushing snapshots we need to have multiple snapshots
-		// but for now we will just have one snapshot and block writes until flush is complete
-		//
+		// will be flushed in background after multiple snapshots are supported
+		// for now block writes until flush is complete
 		sdb.flushSnapshots()
 	}
 }
@@ -187,9 +192,10 @@ func (sdb *SimpleDb) Put(key, value string) error {
 	if err != nil {
 		return err
 	}
+	sdb.mu.Lock()
 	sdb.checkMemTable()
-
 	sdb.memTable.Put(db.RecordTypePut, key, value)
+	defer sdb.mu.Unlock()
 
 	return nil
 }
@@ -374,7 +380,6 @@ func (sdb *SimpleDb) flushSnapshots() {
 
 	// currently only observer is wal flush
 	// remove the snapshot as flush is complete
-	time.Sleep(1 * time.Second)
 
 	sdb.memTableSnapshot = nil
 	// now that sstable has been written to, truncate wal

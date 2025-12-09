@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/MartinSimango/simple-db/internal/cmd/util"
+	"github.com/MartinSimango/simple-db/pkg/db"
 	"github.com/spf13/cobra"
 )
 
@@ -20,25 +21,25 @@ func NewGetCmd() *cobra.Command {
 				cmd.Usage()
 				return
 			}
-			conn, err := util.ConnectToServer(cmd.Flags())
+			address, err := util.GetAddress(cmd.Flags())
 			if err != nil {
-				panic(err)
-			}
-			defer conn.Close()
-			conn.Write(getMessage(args[0]))
-			buf := make([]byte, 1024)
-			n, err := conn.Read(buf)
-			if err != nil {
-				fmt.Println("Error reading server response:", err)
+				fmt.Println("ERROR: invalid address:", err)
 				return
 			}
-			fmt.Println(string(buf[:n]))
+			client, err := db.NewSimpleDbClient(address)
+			if err != nil {
+				fmt.Println("ERROR: failed to connect to server:", err)
+				return
+			}
+			defer client.Close()
+			r, err := client.Get(args[0])
+			if err != nil {
+				fmt.Println("ERROR:", err)
+				return
+			}
+			fmt.Println(r)
 		},
 	}
 
 	return getCmd
-}
-
-func getMessage(key string) []byte {
-	return []byte(fmt.Sprintf("GET\nKey: %s\n\n", key))
 }

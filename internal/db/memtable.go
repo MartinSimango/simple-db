@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -96,6 +97,8 @@ func NewMapMemTable() *MapMemTable {
 func (mt *MapMemTable) Put(recordType RecordType, key, value string) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
+	time.Sleep(250 * time.Microsecond)
+
 	if mt.full && !mt.recovery {
 		panic("cannot write to a full memtable")
 	}
@@ -150,7 +153,6 @@ func (mt *MapMemTable) Delete(key string) error {
 // recoveryMode enables or disables recovery mode.
 //
 // When set to true, this:
-//   - prevents the onFull callback from being called
 //   - prevents panics from [*MapMemTable.Put] when the memtable is full
 func (mt *MapMemTable) SetRecoveryMode(isRecovery bool) {
 	mt.recovery = isRecovery
