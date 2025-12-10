@@ -1,22 +1,26 @@
-db-vet:
-
-db-build:
+# Build binaries	
+sdb-build:
 	go build -o sdb cmd/sdb/main.go
-# 	go build -o sdb-client cmd/sdb-client/main.go
 
-db-install: db-build
+sdb-cli-build:
+	go build -o sdb-cli cmd/sdb-cli/main.go
+
+sdb-test-build:
+	go build -o sdb-test cmd/sdb-test/main.go
+
+
+# Install binaries
+sdb-install: 
 	go install ./cmd/sdb
 
-# 	go install ./cmd/sdb-client
+sdb-cli-install:
+	go install ./cmd/sdb-cli
 
-run-db: db-install
-	sdb
-run-db-quick: 
+
+sdb-test-install:
+	go install ./cmd/sdb-test
+
+
+# Run binaries
+sdb-run: 
 	go run cmd/sdb/main.go
-
-run-client:
-	go run ./cmd/sdb-client/main.go put localhost "Hello, World!"
-
-
-build-db-test:
-	go build -o sdb-test cmd/sdb-test/main.go

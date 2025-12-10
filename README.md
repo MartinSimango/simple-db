@@ -16,7 +16,6 @@ A simple log-structured key-value database engine implemented in Go. Inspired by
 > [!IMPORTANT]
 > This project is still a work in progress so core features are still being developed. The features that have been implemented will have a ticked check box next to them.
 
-
 ## 📋 Table of Contents
 
 - [✨ Features](#-features)
