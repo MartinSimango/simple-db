@@ -149,7 +149,7 @@ sdb-test 100 1000
 
 ### Storage Engine
 
-- **Memory Table**: Thread-safe in-memory sorted map
+- **Memory Table**: Thread-safe in-memory data structure with pluggable implementations
 - **WAL Format**: Protocol Buffers with record types (PUT, DELETE)
 - **SSTable**: Block-based storage with 4KB blocks and 1MB max size
 - **Record Limit**: Maximum 64KB per record
