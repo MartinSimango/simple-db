@@ -61,6 +61,9 @@ Simple-DB implements a log-structured storage engine with the following componen
 - Go 1.25.4 or later
 - Protocol Buffers compiler (for development)
 
+> [!NOTE]
+> Versioning for simple-db will be added when the app has functioning sstable storage.
+
 ### Install the server
 ```bash
 go install github.com/MartinSimango/simple-db/cmd/sdb@latest 
