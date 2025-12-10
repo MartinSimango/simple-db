@@ -161,7 +161,8 @@ func (sdb *SimpleDb) Start() error {
 			// TODO: make the connections longer lived for multiple operations
 			// for now just handle one operation per connection
 			defer c.Close()
-			// TODO: add connection tracking for graceful shutdown
+			// TODO: add connection tracking for graceful shutdown also keep track of idle and active connections
+			// if a connection is idle for too long, close it to free up resources
 			// the server should have a map of active connections and a mutex to protect it
 			sdb.handleConnection(c)
 

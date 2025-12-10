@@ -88,7 +88,7 @@ func NewMapMemTable() *MapMemTable {
 	return &MapMemTable{
 		table:   make(map[string]MemTableValue),
 		size:    0,
-		maxSize: 1 << 20, // 1GB
+		maxSize: 1 << 26, // 64MB
 		full:    false,
 	}
 }
