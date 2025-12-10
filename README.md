@@ -16,6 +16,29 @@ A simple log-structured key-value database engine implemented in Go. Inspired by
 > [!IMPORTANT]
 > This project is still a work in progress so core features are still being developed. The features that have been implemented will have a ticked check box next to them.
 
+
+## 📋 Table of Contents
+
+- [✨ Features](#-features)
+- [🏗️ Architecture](#️-architecture)
+  - [Core Components](#core-components)
+  - [🗃️ Supported MemTable Types](#️-supported-memtable-types)
+- [📦 Installation](#-installation)
+  - [Prerequisites](#prerequisites)
+  - [Install the server](#install-the-server)
+  - [Install the db client](#install-the-db-client)
+  - [Install the load tester](#install-the-load-tester)
+- [🚀 Quick Start](#-quick-start)
+  - [Starting the Database Server](#starting-the-database-server)
+  - [Using the CLI Client](#using-the-cli-client)
+  - [Using the Go Client](#using-the-go-client)
+- [⚡ Performance Testing](#-performance-testing)
+- [📊 Technical Details](#-technical-details)
+  - [Storage Engine](#storage-engine)
+  - [Network Protocol](#network-protocol)
+  - [Concurrency](#concurrency)
+- [📄 License](#-license)
+
 ## ✨ Features
 - [x] **Concurrent Operations**: TCP server handling multiple client connections
 - [x] **Write-Ahead Logging (WAL)**: Ensures data durability using Protocol Buffers
