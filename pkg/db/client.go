@@ -25,11 +25,28 @@ func (client *SimpleDbClient) Close() error {
 	return client.c.Close()
 }
 
+func (client *SimpleDbClient) Reconnect(address string) error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if err := client.c.Close(); err != nil {
+		return err
+	}
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		return err
+	}
+	client.c = conn
+	return nil
+}
+
 func (client *SimpleDbClient) Put(key, value string) (string, error) {
 	return client.queryServer(request{
 		operation: PUT,
 		key:       key,
-		body:      &value,
+		headers: map[string]string{
+			LENGTH_HEADER: fmt.Sprintf("%d", len(value)),
+		},
+		body: &value,
 	})
 }
 
@@ -67,7 +84,8 @@ func (r request) Marshal() []byte {
 }
 
 func (client *SimpleDbClient) queryServer(r request) (string, error) {
-
+	client.mu.Lock()
+	defer client.mu.Unlock()
 	_, err := client.c.Write(r.Marshal())
 	if err != nil {
 		return "", fmt.Errorf("failed to send request to server: %s", err)

@@ -4,7 +4,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 	"unsafe"
 )
 
@@ -89,7 +88,7 @@ func NewMapMemTable() *MapMemTable {
 	return &MapMemTable{
 		table:   make(map[string]MemTableValue),
 		size:    0,
-		maxSize: 1 << 10, // 1MB
+		maxSize: 1 << 20, // 1GB
 		full:    false,
 	}
 }
@@ -97,8 +96,6 @@ func NewMapMemTable() *MapMemTable {
 func (mt *MapMemTable) Put(recordType RecordType, key, value string) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
-	time.Sleep(250 * time.Microsecond)
-
 	if mt.full && !mt.recovery {
 		panic("cannot write to a full memtable")
 	}

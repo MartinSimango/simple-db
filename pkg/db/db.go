@@ -3,17 +3,22 @@ package db
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MartinSimango/simple-db/internal/db"
 	"google.golang.org/protobuf/proto"
 )
+
+var ErrServerClosed = errors.New("simple-db: Server closed")
 
 type Operation string
 
@@ -43,10 +48,11 @@ type Options struct {
 }
 
 type SimpleDb struct {
-	wal      *db.WalFile
-	address  string
-	listener net.Listener
-	memTable db.MemTable
+	wal        *db.WalFile
+	address    string
+	listener   net.Listener
+	inShutdown atomic.Bool // true when server is in shutdown
+	memTable   db.MemTable
 	// we can only have one memTableSnapshot at a time because we have 1 wal file.
 	// else we could accidentally truncate wal files for records or snapshots that are still need to be flushed
 	// so snapshot will have start and end wal file positions to know which wal files to truncate after flush
@@ -143,6 +149,9 @@ func (sdb *SimpleDb) Start() error {
 	for {
 		conn, err := sdb.listener.Accept()
 		// TODO: handle shutdown signal to break this loop
+		if sdb.shuttingDown() {
+			return ErrServerClosed
+		}
 		if err != nil {
 			slog.Error("Error accepting: ", "error", err)
 			continue
@@ -152,15 +161,62 @@ func (sdb *SimpleDb) Start() error {
 			// TODO: make the connections longer lived for multiple operations
 			// for now just handle one operation per connection
 			defer c.Close()
+			// TODO: add connection tracking for graceful shutdown
+			// the server should have a map of active connections and a mutex to protect it
 			sdb.handleConnection(c)
 
 		}(conn)
 	}
 }
 
-func (sdb *SimpleDb) Stop(ctx context.Context) error {
-	sdb.listener.Close()
+func (sdb *SimpleDb) Stop() error {
+	sdb.inShutdown.Store(true)
+
+	sdb.listener.Close() // stop accepting new connections
+	// TODO: flush memtable to sstable
 	return sdb.wal.Close()
+
+}
+
+func (sdb *SimpleDb) Shutdown(ctx context.Context) error {
+	sdb.inShutdown.Store(true)
+
+	sdb.listener.Close() // stop accepting new connections
+
+	// wait for ongoing operations to complete
+	//TODO:  placeholder implementation - in real implementation we would track ongoing operations
+	time.Sleep(2 * time.Second)
+	// TODO: respect context cancellation and review code taken from net/http.Server.Shutdown
+
+	// //	pollIntervalBase := time.Millisecond
+	// nextPollInterval := func() time.Duration {
+	// 	// Add 10% jitter.
+	// 	interval := pollIntervalBase + time.Duration(rand.Intn(int(pollIntervalBase/10)))
+	// 	// Double and clamp for next time.
+	// 	pollIntervalBase *= 2
+	// 	if pollIntervalBase > shutdownPollIntervalMax {
+	// 		pollIntervalBase = shutdownPollIntervalMax
+	// 	}
+	// 	return interval
+	// }
+
+	// timer := time.NewTimer(nextPollInterval())
+	// defer timer.Stop()
+
+	// for {
+	//  TODO: close connections from tracked connections
+	// 	select {
+	// 	case <-ctx.Done():
+	// 		return ctx.Err()
+	// 	 case <-timer.C:
+	//	 timer.Reset(nextPollInterval()):
+	//
+	// 	}
+	// }
+
+	//TODO: flush memtable to sstable
+	return sdb.wal.Close()
+
 }
 
 // checkMemTable checks if the memtable is full and triggers snapshot creation and flush if needed
@@ -241,8 +297,8 @@ func (sdb *SimpleDb) Delete(key string) error {
 
 func readHeaders(r *bufio.Reader) (map[string]string, error) {
 	headers := make(map[string]string)
-	headers[LENGTH_HEADER] = "0"
 	kh := false
+	lh := false
 	for {
 		line, err := readLine(r)
 
@@ -260,69 +316,83 @@ func readHeaders(r *bufio.Reader) (map[string]string, error) {
 		if parts[0] == KEY_HEADER {
 			kh = true
 		}
+		if parts[0] == LENGTH_HEADER {
+			lh = true
+		}
 	}
 	if !kh {
 		return nil, fmt.Errorf("missing KEY header")
+	}
+	if !lh {
+		return nil, fmt.Errorf("missing LENGTH header")
 	}
 
 	return headers, nil
 }
 
 func readLine(r *bufio.Reader) (string, error) {
-	line, err := r.ReadString('\n')
+	line, _, err := r.ReadLine()
 	if err != nil {
 		return "", err
 	}
-	// Trim both \n and optional \r
-	return strings.TrimRight(line, "\r\n"), nil
+	return string(line), nil
 }
-func (sdb *SimpleDb) handleConnection(conn net.Conn) {
+func (sdb *SimpleDb) handleConnection(conn io.ReadWriteCloser) {
 
 	reader := bufio.NewReader(conn)
-	op, err := readLine(reader)
-	if err != nil {
-		conn.Write([]byte(fmt.Sprintf("ERROR: %s", err.Error())))
-		return
+	for {
+		op, err := readLine(reader)
+		if err != nil {
+			defer conn.Close()
+			if err == io.EOF {
+				return
+			}
+			conn.Write([]byte(fmt.Sprintf("ERROR: %s", err.Error())))
+			return
+		}
+		if op == "" {
+			conn.Write([]byte("ERROR: missing operation"))
+			conn.Close()
+			return
+		}
+		operation := Operation(op)
+		if !operation.IsValid() {
+			conn.Write([]byte(fmt.Sprintf("ERROR: invalid operation '%s'", op)))
+			conn.Close()
+			return
+		}
+
+		headers, err := readHeaders(reader)
+		if err != nil {
+			conn.Write([]byte(fmt.Sprintf("ERROR: %s", err.Error())))
+			conn.Close()
+			return
+
+		}
+
+		key := headers[KEY_HEADER]
+		length := headers[LENGTH_HEADER]
+
+		valueLen, err := strconv.Atoi(length)
+
+		if err != nil {
+			conn.Write([]byte(fmt.Sprintf("ERROR: invalid LENGTH header '%s': %s", length, err.Error())))
+			conn.Close()
+			return
+		}
+
+		value := make([]byte, valueLen)
+		_, err = reader.Read(value)
+		if err != nil {
+			conn.Write([]byte(fmt.Sprintf("ERROR: reading value: %s", err.Error())))
+			conn.Close()
+			return
+		}
+		sdb.handleOperation(conn, operation, headers, key, string(value))
 	}
-	if op == "" {
-		conn.Write([]byte("ERROR: missing operation"))
-		return
-	}
-	operation := Operation(op)
-	if !operation.IsValid() {
-		conn.Write([]byte(fmt.Sprintf("ERROR: invalid operation '%s'", op)))
-		return
-	}
-
-	headers, err := readHeaders(reader)
-	if err != nil {
-		conn.Write([]byte(fmt.Sprintf("ERROR: %s", err.Error())))
-		return
-
-	}
-
-	key := headers[KEY_HEADER]
-	length := headers[LENGTH_HEADER]
-
-	valueLen, err := strconv.Atoi(length)
-
-	if err != nil {
-		conn.Write([]byte(fmt.Sprintf("ERROR: invalid LENGTH header '%s': %s", length, err.Error())))
-		return
-	}
-
-	value := make([]byte, valueLen)
-	_, err = reader.Read(value)
-	if err != nil {
-		conn.Write([]byte(fmt.Sprintf("ERROR: reading value: %s", err.Error())))
-		return
-	}
-	// TODO: headers sent for PREFIX option in GET
-	sdb.handleOperation(conn, operation, headers, key, string(value))
-
 }
 
-func (sdb *SimpleDb) handleOperation(conn net.Conn, operation Operation, headers map[string]string, key, value string) {
+func (sdb *SimpleDb) handleOperation(conn io.Writer, operation Operation, headers map[string]string, key, value string) {
 	var err error
 	switch operation {
 	case PUT:
@@ -389,4 +459,9 @@ func (sdb *SimpleDb) flushSnapshots() {
 	// but this needs multiple wal files to be implemented first
 	go sdb.wal.Truncate()
 
+}
+
+func (sdb *SimpleDb) shuttingDown() bool {
+	// placeholder implementation
+	return sdb.inShutdown.Load()
 }

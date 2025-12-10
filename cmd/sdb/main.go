@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/MartinSimango/simple-db/pkg/db"
 )
@@ -18,16 +19,23 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("Starting simple-db on :5050")
+	errChan := make(chan error)
 	go func() {
-		if err := simpleDb.Start(); err != nil {
-			slog.Error("Failed to start simple-db", "error", err)
-			os.Exit(1)
-		}
+		errChan <- simpleDb.Start()
 	}()
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
-	<-quit
-	slog.Info("Shutting down simple-db")
-	simpleDb.Stop(context.Background())
+	select {
+	case <-quit:
+		slog.Info("Shutting down simple-db")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		simpleDb.Shutdown(ctx)
+	case err := <-errChan:
+		if err != nil {
+			slog.Error("Failed to start simple-db", "error", err)
+			os.Exit(1)
+		}
+	}
 
 }
