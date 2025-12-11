@@ -14,7 +14,7 @@ enum RecordType {
 // A single WAL entry.
 message WalRecord {
     RecordType record_type = 1;
-    string  key = 2;
+    string key = 2;
     string value = 3; // empty for deletes
     // TODO: add a sequence number field to unique identify records if needed
 }
