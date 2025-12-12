@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
@@ -39,8 +40,8 @@ func (client *SimpleDbClient) Reconnect(address string) error {
 	return nil
 }
 
-func (client *SimpleDbClient) Put(key, value string) (string, error) {
-	return client.queryServer(request{
+func (client *SimpleDbClient) Put(ctx context.Context, key, value string) (string, error) {
+	return client.queryServer(ctx, request{
 		operation: PUT,
 		key:       key,
 		headers: map[string]string{
@@ -50,15 +51,15 @@ func (client *SimpleDbClient) Put(key, value string) (string, error) {
 	})
 }
 
-func (client *SimpleDbClient) Get(key string) (string, error) {
-	return client.queryServer(request{
+func (client *SimpleDbClient) Get(ctx context.Context, key string) (string, error) {
+	return client.queryServer(ctx, request{
 		operation: GET,
 		key:       key,
 	})
 }
 
-func (client *SimpleDbClient) Delete(key string) (string, error) {
-	return client.queryServer(request{
+func (client *SimpleDbClient) Delete(ctx context.Context, key string) (string, error) {
+	return client.queryServer(ctx, request{
 		operation: DELETE,
 		key:       key,
 	})
@@ -83,7 +84,7 @@ func (r request) Marshal() []byte {
 	return []byte(req)
 }
 
-func (client *SimpleDbClient) queryServer(r request) (string, error) {
+func (client *SimpleDbClient) queryServer(ctx context.Context, r request) (string, error) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	_, err := client.c.Write(r.Marshal())
@@ -91,9 +92,25 @@ func (client *SimpleDbClient) queryServer(r request) (string, error) {
 		return "", fmt.Errorf("failed to send request to server: %s", err)
 	}
 	buf := make([]byte, 1024)
-	n, err := client.c.Read(buf)
-	if err != nil {
-		return "", fmt.Errorf("failed to read server response: %s", err)
+	in := make(chan int, 1)
+	e := make(chan error, 1)
+
+	go func() {
+		n, err := client.c.Read(buf)
+		if err != nil {
+			e <- fmt.Errorf("failed to read server response: %s", err)
+		}
+		in <- n
+
+	}()
+
+	select {
+	case err := <-e:
+		return "", err
+	case n := <-in:
+		return string(buf[:n]), nil
+	case <-ctx.Done():
+		return "", fmt.Errorf("request timed out: %s", ctx.Err())
 	}
-	return string(buf[:n]), nil
+
 }

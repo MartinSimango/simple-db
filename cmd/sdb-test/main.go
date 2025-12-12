@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -52,14 +53,16 @@ func main() {
 }
 
 func send(client *db.SimpleDbClient, key, value string) {
-
-	if r, err := client.Put(key, value); err != nil {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if r, err := client.Put(ctx, key, value); err != nil {
 		fmt.Printf("Error putting key %v: %v\n", key, err)
 		fmt.Println("Reconnecting...")
-		client.Reconnect(":5050")
+		client.Reconnect(":5050") // TODO: only reconnect if the error is connection-related
 
 	} else {
-		// fmt.Println(r)
+		fmt.Println(r)
 		if strings.HasPrefix(r, "ERROR") {
 			fmt.Println("Reconnecting...")
 			client.Reconnect(":5050")

@@ -32,7 +32,7 @@ func NewDeleteCmd() *cobra.Command {
 				return
 			}
 			defer client.Close()
-			r, err := client.Delete(args[0])
+			r, err := client.Delete(cmd.Context(), args[0])
 			if err != nil {
 				fmt.Println("ERROR:", err)
 				return

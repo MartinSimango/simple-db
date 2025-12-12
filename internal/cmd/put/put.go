@@ -38,7 +38,7 @@ Arguments:
 				return
 			}
 			defer client.Close()
-			r, err := client.Put(args[0], args[1])
+			r, err := client.Put(cmd.Context(), args[0], args[1])
 			if err != nil {
 				fmt.Println("ERROR:", err)
 				return

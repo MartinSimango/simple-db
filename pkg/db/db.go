@@ -172,8 +172,10 @@ func (sdb *SimpleDb) Start() error {
 
 func (sdb *SimpleDb) Stop() error {
 	sdb.inShutdown.Store(true)
-
-	sdb.listener.Close() // stop accepting new connections
+	// TODO: ensure listener only close once and remove nil check by once sync.Once
+	if sdb.listener != nil {
+		sdb.listener.Close() // stop accepting new connections
+	}
 	// TODO: flush memtable to sstable
 	return sdb.wal.Close()
 
@@ -182,7 +184,9 @@ func (sdb *SimpleDb) Stop() error {
 func (sdb *SimpleDb) Shutdown(ctx context.Context) error {
 	sdb.inShutdown.Store(true)
 
-	sdb.listener.Close() // stop accepting new connections
+	if sdb.listener != nil {
+		sdb.listener.Close() // stop accepting new connections
+	}
 
 	// wait for ongoing operations to complete
 	//TODO:  placeholder implementation - in real implementation we would track ongoing operations
@@ -235,7 +239,7 @@ func (sdb *SimpleDb) checkMemTable() {
 }
 
 func (sdb *SimpleDb) Put(key, value string) error {
-
+	time.Sleep(1 * time.Second) // simulate some processing delay
 	record := &db.WalRecord{
 		RecordType: db.RecordTypePut,
 		Key:        key,

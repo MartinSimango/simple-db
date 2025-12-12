@@ -32,7 +32,7 @@ func NewGetCmd() *cobra.Command {
 				return
 			}
 			defer client.Close()
-			r, err := client.Get(args[0])
+			r, err := client.Get(cmd.Context(), args[0])
 			if err != nil {
 				fmt.Println("ERROR:", err)
 				return
