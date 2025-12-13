@@ -239,7 +239,6 @@ func (sdb *SimpleDb) checkMemTable() {
 }
 
 func (sdb *SimpleDb) Put(key, value string) error {
-	time.Sleep(1 * time.Second) // simulate some processing delay
 	record := &db.WalRecord{
 		RecordType: db.RecordTypePut,
 		Key:        key,
@@ -428,7 +427,6 @@ func (sdb *SimpleDb) handleOperation(conn io.Writer, operation Operation, header
 
 	if err != nil {
 		conn.Write([]byte("ERROR: " + err.Error()))
-		return
 	}
 }
 

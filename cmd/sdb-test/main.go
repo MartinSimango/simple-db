@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -27,11 +26,11 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(cn)
 	s := time.Now()
-	for i := 0; i < cn; i++ { // cn tcp connections
+	for i := 0; i < cn; i++ {
 		go func(id int) {
 			defer wg.Done()
 			var iwg sync.WaitGroup
-			iwg.Add(rpc) // rpc - requests per connection
+			iwg.Add(rpc)
 			client, err := db.NewSimpleDbClient(":5050")
 			if err != nil {
 				fmt.Println("ERROR: failed to connect to server:", err)
@@ -54,18 +53,11 @@ func main() {
 
 func send(client *db.SimpleDbClient, key, value string) {
 	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 	if r, err := client.Put(ctx, key, value); err != nil {
 		fmt.Printf("Error putting key %v: %v\n", key, err)
-		fmt.Println("Reconnecting...")
-		client.Reconnect(":5050") // TODO: only reconnect if the error is connection-related
-
 	} else {
 		fmt.Println(r)
-		if strings.HasPrefix(r, "ERROR") {
-			fmt.Println("Reconnecting...")
-			client.Reconnect(":5050")
-		}
 	}
 }

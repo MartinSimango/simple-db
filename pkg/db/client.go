@@ -2,14 +2,22 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"os"
+	"strings"
 	"sync"
 )
 
+var (
+	ErrTimeout = fmt.Errorf("request timed out")
+)
+
 type SimpleDbClient struct {
-	c  net.Conn
-	mu sync.Mutex
+	c    net.Conn
+	addr string
+	mu   sync.Mutex
 }
 
 func NewSimpleDbClient(address string) (*SimpleDbClient, error) {
@@ -18,7 +26,8 @@ func NewSimpleDbClient(address string) (*SimpleDbClient, error) {
 		return nil, err
 	}
 	return &SimpleDbClient{
-		c: conn,
+		c:    conn,
+		addr: address,
 	}, nil
 }
 
@@ -26,13 +35,17 @@ func (client *SimpleDbClient) Close() error {
 	return client.c.Close()
 }
 
-func (client *SimpleDbClient) Reconnect(address string) error {
+func (client *SimpleDbClient) Reconnect() error {
 	client.mu.Lock()
 	defer client.mu.Unlock()
+	return client.reconnect()
+}
+
+func (client *SimpleDbClient) reconnect() error {
 	if err := client.c.Close(); err != nil {
 		return err
 	}
-	conn, err := net.Dial("tcp", address)
+	conn, err := net.Dial("tcp", client.addr)
 	if err != nil {
 		return err
 	}
@@ -92,25 +105,22 @@ func (client *SimpleDbClient) queryServer(ctx context.Context, r request) (strin
 		return "", fmt.Errorf("failed to send request to server: %s", err)
 	}
 	buf := make([]byte, 1024)
-	in := make(chan int, 1)
-	e := make(chan error, 1)
 
-	go func() {
-		n, err := client.c.Read(buf)
-		if err != nil {
-			e <- fmt.Errorf("failed to read server response: %s", err)
+	t, _ := ctx.Deadline()
+	client.c.SetReadDeadline(t)
+	n, err := client.c.Read(buf)
+	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return "", ErrTimeout
 		}
-		in <- n
-
-	}()
-
-	select {
-	case err := <-e:
-		return "", err
-	case n := <-in:
-		return string(buf[:n]), nil
-	case <-ctx.Done():
-		return "", fmt.Errorf("request timed out: %s", ctx.Err())
+		return "", fmt.Errorf("failed to read server response: %s", err)
 	}
+
+	m := string(buf[:n])
+	if strings.HasPrefix(m, "ERROR: ") {
+		client.reconnect() // server ends connection on error, so reconnect
+		return "", fmt.Errorf("failed to process request: %s", m)
+	}
+	return m, nil
 
 }
