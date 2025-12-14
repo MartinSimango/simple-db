@@ -7,7 +7,7 @@ import (
 )
 
 type SSTable interface {
-	Flush(memTable []MemTableData) (uint32, error)
+	Flush(memTable []MemTableData) (int, error)
 	Get(ctx context.Context, key string) (string, bool)
 	GetPrefix(ctx context.Context, prefix string) map[string]string
 	Close() error
@@ -90,7 +90,10 @@ type SSTableBlock struct {
 
 type fileSSTable struct {
 	*os.File
-	filename string
+	filename          string
+	blockRestartCount uint8
+	protoEncoder      *ProtoEncoder
+	protoDecoder      *ProtoDecoder
 }
 
 var _ SSTable = (*fileSSTable)(nil)
@@ -102,8 +105,9 @@ func Create(filename string) (SSTable, error) {
 		return nil, err
 	}
 	sst := &fileSSTable{
-		File:     f,
-		filename: filename,
+		File:              f,
+		filename:          filename,
+		blockRestartCount: 8, // default restart count TODO: make configurable
 	}
 	return sst, nil
 }
@@ -127,20 +131,44 @@ func Create(filename string) (SSTable, error) {
 // }
 
 // Flush flushes memtable data to SSTable and returns the number of records written
-func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
+func (sst *fileSSTable) Flush(memTable []MemTableData) (int, error) {
 	// create new SSTable file
 	// write data blocks
 	// write index block
 	// write footer
 
-	// offset := uint32(0)
-	// restartPoints := make([]uint32, 0)
+	offset := 0
+	restartPoints := make([]int, 0)
+	var restartPointKey []byte
+	for i, m := range memTable {
+		if i%int(sst.blockRestartCount) == 0 {
+			restartPoints = append(restartPoints, offset)
+			restartPointKey = []byte(m.Key)
+		}
+		// simple LCS prefix problem
+		s := uint32(0)
+		for _, b := range restartPointKey {
+			if s >= uint32(len(m.Key)) || m.Key[s] != b {
+				break
+			}
+			s++
+		}
+		record := &BlockEntry{
+			UnsharedKey:  []byte(m.Key)[s:],
+			SharedKeyLen: s,
+			Value:        []byte(m.Value),
+		}
+		n, err := sst.protoEncoder.Encode(record)
+		if err != nil {
+			return offset, err
+		}
+		// check if o
+		offset += n
+	}
 
-	// for i, m := range memTable {
-
-	// 	// record := &BlockEntry{
-	// 	// 	UnsharedKey: ,
-	// 	// }
+	// record := &BlockEntry{
+	// 	UnsharedKey: ,
+	// }
 
 	// 	// write data block entry
 	// 	record.sharedKeyCount = 0

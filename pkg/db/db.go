@@ -70,6 +70,7 @@ type SimpleDb struct {
 	// mutex to protect the snapshot during flush
 	mu     sync.Mutex
 	logger *slog.Logger
+	// TODO: add read and write timeouts
 }
 
 const recordMaxSize = 1 << 16 // 65536 bytes - 64KB
