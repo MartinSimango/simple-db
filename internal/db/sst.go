@@ -3,8 +3,10 @@ package db
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
+	"hash/crc32"
 	"os"
 )
 
@@ -98,6 +100,7 @@ type fileSSTable struct {
 	blockRestartCount uint8
 	protoEncoder      *ProtoEncoder
 	protoDecoder      *ProtoDecoder
+	blockBuffer       *bytes.Buffer
 }
 
 var _ SSTable = (*fileSSTable)(nil)
@@ -110,14 +113,16 @@ func Create(filename string) (SSTable, error) {
 	}
 	w := bufio.NewWriter(f)
 	r := bufio.NewReader(f)
+
 	sst := &fileSSTable{
 		file:              f,
 		filename:          filename,
 		Writer:            w,
 		Reader:            r,
 		blockRestartCount: 8, // default restart count TODO: make configurable
+		blockBuffer:       bytes.NewBuffer(make([]byte, 0, blockSize)),
 	}
-	sst.protoEncoder = NewProtoEncoder(sst.Writer)
+	sst.protoEncoder = NewProtoEncoder(sst.blockBuffer)
 	sst.protoDecoder = NewProtoDecoder(sst.Reader)
 	return sst, nil
 }
@@ -166,7 +171,7 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 	nb := true
 	blockStartKey := ""
 	blockPosition := 0
-
+	// TODO: protobuf encodes data in this buffer
 	for _, m := range memTable {
 		// TODO: check if block size exceeded
 		// then check if restart point exceeded
@@ -204,30 +209,22 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 		if blockOffset+sst.protoEncoder.EncodeSize(record)+bfSize > blockSize {
 			for _, rp := range restartPoints {
 				// write restart points
-				binary.Write(sst.Writer, binary.LittleEndian, rp)
+				binary.Write(sst.blockBuffer, binary.LittleEndian, rp)
 			}
 			// write restart count
-			binary.Write(sst.Writer, binary.LittleEndian, uint32(len(restartPoints)))
+			binary.Write(sst.blockBuffer, binary.LittleEndian, uint32(len(restartPoints)))
 
 			// write checksum of block
-			// sst.Writer.Flush()
-			// sst.Writer.
-			// write out block footer
-			// sst.Write()
-			// write out restart points
-			// write out restart count
-			// write out checksum of block
-			// reset restartPoints
-			// reset blockOffset
-			// sst.Write()
-			// need to go to new data block
-			// checksum := uint32(0) // TODO: calculate checksum
-			// h := crc32.NewIEEE()
-			// h.Write()
-			// h.Sum32()
-			// h.Write([]byte{}) // TODO: write block data
-			// h.S
-			// restartPoints = make([]int, 0)
+			h := crc32.NewIEEE()
+			h.Write(sst.blockBuffer.Bytes())
+			checksum := h.Sum32()
+
+			// write block
+			sst.blockBuffer.WriteTo(sst.Writer)
+			sst.blockBuffer.Reset()
+
+			// followed by checksum
+			binary.Write(sst.Writer, binary.LittleEndian, checksum)
 
 			ibOffsets[blockStartKey] = BlockHandler{
 				Offset: uint32(offset),
