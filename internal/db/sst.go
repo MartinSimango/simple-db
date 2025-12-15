@@ -2,12 +2,14 @@
 package db
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
 	"os"
 )
 
 type SSTable interface {
-	Flush(memTable []MemTableData) (int, error)
+	Flush(memTable []MemTableData) (uint32, error)
 	Get(ctx context.Context, key string) (string, bool)
 	GetPrefix(ctx context.Context, prefix string) map[string]string
 	Close() error
@@ -89,7 +91,9 @@ type SSTableBlock struct {
 // index block size
 
 type fileSSTable struct {
-	*os.File
+	file *os.File
+	*bufio.Writer
+	*bufio.Reader
 	filename          string
 	blockRestartCount uint8
 	protoEncoder      *ProtoEncoder
@@ -104,67 +108,149 @@ func Create(filename string) (SSTable, error) {
 	if err != nil {
 		return nil, err
 	}
+	w := bufio.NewWriter(f)
+	r := bufio.NewReader(f)
 	sst := &fileSSTable{
-		File:              f,
+		file:              f,
 		filename:          filename,
+		Writer:            w,
+		Reader:            r,
 		blockRestartCount: 8, // default restart count TODO: make configurable
 	}
+	sst.protoEncoder = NewProtoEncoder(sst.Writer)
+	sst.protoDecoder = NewProtoDecoder(sst.Reader)
 	return sst, nil
 }
 
-// func (w *WalFile) WriteRecord(record *WalRecord) error {
-// 	w.mu.Lock()
-// 	defer w.mu.Unlock()
-// 	// make size of record is 2^16 bytes - 65536 bytes - limit set by simpledb
-// 	if err := binary.Write(w.file, binary.LittleEndian, uint16(proto.Size(record))); err != nil {
-// 		return err
-// 	}
-// 	bytes, err := proto.Marshal(record)
-// 	if err != nil {
-// 		return err // TODO: now file is corrupted as size is written but data is not - remediate this
-// 	}
-// 	_, err = w.file.Write(bytes)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	return nil
-// }
+//	func (w *WalFile) WriteRecord(record *WalRecord) error {
+//		w.mu.Lock()
+//		defer w.mu.Unlock()
+//		// make size of record is 2^16 bytes - 65536 bytes - limit set by simpledb
+//		if err := binary.Write(w.file, binary.LittleEndian, uint16(proto.Size(record))); err != nil {
+//			return err
+//		}
+//		bytes, err := proto.Marshal(record)
+//		if err != nil {
+//			return err // TODO: now file is corrupted as size is written but data is not - remediate this
+//		}
+//		_, err = w.file.Write(bytes)
+//		if err != nil {
+//			return err
+//		}
+//		return nil
+//	}
+type BlockHandler struct {
+	Size   uint32
+	Offset uint32
+}
 
 // Flush flushes memtable data to SSTable and returns the number of records written
-func (sst *fileSSTable) Flush(memTable []MemTableData) (int, error) {
+func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 	// create new SSTable file
 	// write data blocks
 	// write index block
 	// write footer
 
-	offset := 0
-	restartPoints := make([]int, 0)
+	var offset uint32
+	blockOffset := 0
+
+	restartPoints := make([]uint32, 0)
 	var restartPointKey []byte
-	for i, m := range memTable {
-		if i%int(sst.blockRestartCount) == 0 {
+
+	// block variables
+	// bCount := 0
+	ibOffsets := make(map[string]BlockHandler)
+
+	// size of block footer in bytes
+	bfSize := 0
+	nb := true
+	blockStartKey := ""
+	blockPosition := 0
+
+	for _, m := range memTable {
+		// TODO: check if block size exceeded
+		// then check if restart point exceeded
+		// if new block reset restart points
+		if nb {
+			blockStartKey = m.Key
+			bfSize = 4 // 4 bytes for restart count
+			nb = false
+			blockOffset, blockPosition = 0, 0
+		}
+
+		// shared key length
+		s := 0
+		if blockPosition%int(sst.blockRestartCount) == 0 {
 			restartPoints = append(restartPoints, offset)
 			restartPointKey = []byte(m.Key)
+			bfSize += 4 // 4 bytes for restart point offset
+
+			s = len(restartPointKey)
+
 		}
-		// simple LCS prefix problem
-		s := uint32(0)
-		for _, b := range restartPointKey {
-			if s >= uint32(len(m.Key)) || m.Key[s] != b {
-				break
+		if s == 0 {
+			for _, b := range restartPointKey {
+				if s >= len(m.Key) || m.Key[s] != b {
+					break
+				}
+				s++
 			}
-			s++
 		}
 		record := &BlockEntry{
 			UnsharedKey:  []byte(m.Key)[s:],
-			SharedKeyLen: s,
+			SharedKeyLen: uint32(s),
 			Value:        []byte(m.Value),
+		}
+		if blockOffset+sst.protoEncoder.EncodeSize(record)+bfSize > blockSize {
+			for _, rp := range restartPoints {
+				// write restart points
+				binary.Write(sst.Writer, binary.LittleEndian, rp)
+			}
+			// write restart count
+			binary.Write(sst.Writer, binary.LittleEndian, uint32(len(restartPoints)))
+
+			// write checksum of block
+			// sst.Writer.Flush()
+			// sst.Writer.
+			// write out block footer
+			// sst.Write()
+			// write out restart points
+			// write out restart count
+			// write out checksum of block
+			// reset restartPoints
+			// reset blockOffset
+			// sst.Write()
+			// need to go to new data block
+			// checksum := uint32(0) // TODO: calculate checksum
+			// h := crc32.NewIEEE()
+			// h.Write()
+			// h.Sum32()
+			// h.Write([]byte{}) // TODO: write block data
+			// h.S
+			// restartPoints = make([]int, 0)
+
+			ibOffsets[blockStartKey] = BlockHandler{
+				Offset: uint32(offset),
+				Size:   uint32(blockOffset),
+			}
+
+			nb = true
+
 		}
 		n, err := sst.protoEncoder.Encode(record)
 		if err != nil {
 			return offset, err
 		}
-		// check if o
-		offset += n
+		offset += uint32(n)
+		blockOffset += n
 	}
+
+	// if !blockFooterWritten {
+	// 	// write out restart points
+	// 	// write out restart count
+	// 	// write out checksum of block
+	// 	sst.Write()
+	// }
 
 	// record := &BlockEntry{
 	// 	UnsharedKey: ,
@@ -210,7 +296,7 @@ func (sst *fileSSTable) GetPrefix(ctx context.Context, prefix string) map[string
 }
 
 func (sst *fileSSTable) Close() error {
-	return sst.File.Close()
+	return sst.file.Close()
 }
 
 // func (sst *SSTable) read(key string) (string, bool) {
@@ -223,3 +309,5 @@ func (sst *fileSSTable) Close() error {
 // t index
 
 // Compaction logic
+
+// algorithm

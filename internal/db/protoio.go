@@ -34,6 +34,7 @@ func NewProtoDecoder(r io.Reader) *ProtoDecoder {
 	} // 65536 bytes // TODO: make buffer size configurable
 }
 
+// Encode encodes the given proto message and writes it to the underlying writer.
 func (p *ProtoEncoder) Encode(msg proto.Message) (n int, err error) {
 	// TODO: make this very explicit when also writing to memtable and sstable
 	// maybe don't limit size of record
@@ -50,6 +51,11 @@ func (p *ProtoEncoder) Encode(msg proto.Message) (n int, err error) {
 	n, err = p.w.Write(bytes)
 	return n + int(unsafe.Sizeof(size)), err
 
+}
+
+// EncodeSize returns the size in bytes that the encoded message will take
+func (p *ProtoEncoder) EncodeSize(msg proto.Message) int {
+	return proto.Size(msg) + int(unsafe.Sizeof(proto.Size(msg)))
 }
 
 func (p *ProtoDecoder) Decode(msg proto.Message) error {
