@@ -241,6 +241,7 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 		if err != nil {
 			return uint32(i), err
 		}
+
 		// write block to file
 		sst.blockBuffer.WriteTo(sst.Writer)
 		sst.blockBuffer.Reset()
