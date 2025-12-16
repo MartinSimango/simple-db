@@ -6,9 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"hash/crc32"
 	"os"
 )
+
+var ErrMemTableUnsorted = errors.New("memtable data is not sorted")
 
 type SSTable interface {
 	Flush(memTable []MemTableData) (uint32, error)
@@ -96,11 +100,11 @@ type fileSSTable struct {
 	file *os.File
 	*bufio.Writer
 	*bufio.Reader
-	filename          string
-	blockRestartCount uint8
-	protoEncoder      *ProtoEncoder
-	protoDecoder      *ProtoDecoder
-	blockBuffer       *bytes.Buffer
+	filename     string
+	brc          uint8
+	protoEncoder *ProtoEncoder
+	protoDecoder *ProtoDecoder
+	blockBuffer  *bytes.Buffer
 }
 
 var _ SSTable = (*fileSSTable)(nil)
@@ -115,12 +119,12 @@ func Create(filename string) (SSTable, error) {
 	r := bufio.NewReader(f)
 
 	sst := &fileSSTable{
-		file:              f,
-		filename:          filename,
-		Writer:            w,
-		Reader:            r,
-		blockRestartCount: 8, // default restart count TODO: make configurable
-		blockBuffer:       bytes.NewBuffer(make([]byte, 0, blockSize)),
+		file:        f,
+		filename:    filename,
+		Writer:      w,
+		Reader:      r,
+		brc:         8, // default restart count TODO: make configurable
+		blockBuffer: bytes.NewBuffer(make([]byte, 0, blockSize)),
 	}
 	sst.protoEncoder = NewProtoEncoder(sst.blockBuffer)
 	sst.protoDecoder = NewProtoDecoder(sst.Reader)
@@ -144,55 +148,31 @@ func Create(filename string) (SSTable, error) {
 //		}
 //		return nil
 //	}
-type BlockHandler struct {
-	Size   uint32
-	Offset uint32
+
+type Block struct {
+	EntryCount uint32
+	Size       uint32
+	Offset     uint32
 }
 
-// Flush flushes memtable data to SSTable and returns the number of records written
-func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
-	// create new SSTable file
-	// write data blocks
-	// write index block
-	// write footer
+// writeBlock writes the given memtable data as blocks to the SSTable file.
+// it returns the written Block metadata.
+func (sst *fileSSTable) writeBlock(offset uint32, memTable []MemTableData) (Block, error) {
 
-	var offset uint32
-	blockOffset := 0
-
-	restartPoints := make([]uint32, 0)
+	var block Block
 	var restartPointKey []byte
-
-	// block variables
-	// bCount := 0
-	ibOffsets := make(map[string]BlockHandler)
-
-	// size of block footer in bytes
-	bfSize := 0
-	nb := true
-	blockStartKey := ""
-	blockPosition := 0
-	// TODO: protobuf encodes data in this buffer
-	for _, m := range memTable {
-		// TODO: check if block size exceeded
-		// then check if restart point exceeded
-		// if new block reset restart points
-		if nb {
-			blockStartKey = m.Key
-			bfSize = 4 // 4 bytes for restart count
-			nb = false
-			blockOffset, blockPosition = 0, 0
-		}
-
+	var bfSize uint32 = 4 // restart points + restart count
+	var restartPoints []uint32
+	for i, m := range memTable {
 		// shared key length
 		s := 0
-		if blockPosition%int(sst.blockRestartCount) == 0 {
+		if i%int(sst.brc) == 0 {
 			restartPoints = append(restartPoints, offset)
 			restartPointKey = []byte(m.Key)
-			bfSize += 4 // 4 bytes for restart point offset
-
+			bfSize += 4
 			s = len(restartPointKey)
-
 		}
+
 		if s == 0 {
 			for _, b := range restartPointKey {
 				if s >= len(m.Key) || m.Key[s] != b {
@@ -201,83 +181,78 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 				s++
 			}
 		}
+
 		record := &BlockEntry{
 			UnsharedKey:  []byte(m.Key)[s:],
 			SharedKeyLen: uint32(s),
 			Value:        []byte(m.Value),
 		}
-		if blockOffset+sst.protoEncoder.EncodeSize(record)+bfSize > blockSize {
-			for _, rp := range restartPoints {
-				// write restart points
-				binary.Write(sst.blockBuffer, binary.LittleEndian, rp)
-			}
-			// write restart count
-			binary.Write(sst.blockBuffer, binary.LittleEndian, uint32(len(restartPoints)))
-
-			// write checksum of block
-			h := crc32.NewIEEE()
-			h.Write(sst.blockBuffer.Bytes())
-			checksum := h.Sum32()
-
-			// write block
-			sst.blockBuffer.WriteTo(sst.Writer)
-			sst.blockBuffer.Reset()
-
-			// followed by checksum
-			binary.Write(sst.Writer, binary.LittleEndian, checksum)
-
-			ibOffsets[blockStartKey] = BlockHandler{
-				Offset: uint32(offset),
-				Size:   uint32(blockOffset),
-			}
-
-			nb = true
-
+		if block.Size+uint32(sst.protoEncoder.EncodeSize(record))+bfSize > blockSize {
+			// record would exceed block size
+			// TODO: allow for overflows blocks later as these limits the size of values we can store
+			break
 		}
+		// encoder is setup to write to block buffer
 		n, err := sst.protoEncoder.Encode(record)
 		if err != nil {
-			return offset, err
+			return block, err
 		}
-		offset += uint32(n)
-		blockOffset += n
+		block.EntryCount++
+		block.Size += uint32(n)
+
+	}
+	// write restart points, restart count and checksum
+	for _, rp := range restartPoints {
+		if err := binary.Write(sst.blockBuffer, binary.LittleEndian, rp); err != nil {
+			return block, fmt.Errorf("failed to write restart point: %w", err)
+		}
+	}
+	if err := binary.Write(sst.blockBuffer, binary.LittleEndian, uint32(len(restartPoints))); err != nil {
+		return block, fmt.Errorf("failed to write restart count: %w", err)
 	}
 
-	// if !blockFooterWritten {
-	// 	// write out restart points
-	// 	// write out restart count
-	// 	// write out checksum of block
-	// 	sst.Write()
-	// }
+	h := crc32.NewIEEE()
+	if _, err := h.Write(sst.blockBuffer.Bytes()); err != nil {
+		return block, fmt.Errorf("failed to compute checksum: %w", err)
+	}
+	checksum := h.Sum32()
+	if err := binary.Write(sst.blockBuffer, binary.LittleEndian, checksum); err != nil {
+		return block, fmt.Errorf("failed to write checksum: %w", err)
+	}
 
-	// record := &BlockEntry{
-	// 	UnsharedKey: ,
-	// }
+	block.Size += bfSize
+	block.Offset = offset + block.Size + 4 // 4 bytes for checksum
 
-	// 	// write data block entry
-	// 	record.sharedKeyCount = 0
-	// 	record.unsharedKeyCount = uint64(len(m.Key))
-	// 	record.valueLen = uint64(len(m.Value))
-	// 	bytes, err := proto.Marshal()
-	// 	if err != nil {
-	// 		return 0, err
-	// 	}
-	// 	_, err = sst.Write(bytes)
-	// 	if err != nil {
-	// 		return 0, err
-	// 	}
-	// 	// write data block entries
-	// }
+	return block, nil
+}
 
-	// algorithm:
-	// Write data blocks
-	// size := uint32(0)
-	// for _, m := range memTable {
-	// 	key := m.Key
-	// }
+// Flush flushes memtable data to SSTable and returns the number of records written
+func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
+	i := 0
+	offset := uint32(0)
+	indexBlock := make(map[string]Block)
+	for i < len(memTable) {
+		// check if memtable is sorted never just assume it is sorted
+		if i != len(memTable)-1 && memTable[i].Key > memTable[i+1].Key {
+			return uint32(i), ErrMemTableUnsorted
+		}
 
-	// Write index block
+		block, err := sst.writeBlock(offset, memTable[i:])
+		if err != nil {
+			return uint32(i), err
+		}
+		// write block to file
+		sst.blockBuffer.WriteTo(sst.Writer)
+		sst.blockBuffer.Reset()
 
-	// Write footer
+		// write index entry
+		indexBlock[memTable[i].Key] = block
+
+		// write to index block
+		i += int(block.EntryCount)
+		offset = block.Offset
+	}
+	// write index block
 
 	return 0, nil
 }
