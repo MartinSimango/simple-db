@@ -9,3 +9,26 @@ message BlockEntry {
     uint32 shared_key_len = 2;
     bytes value = 3;
 }
+
+message BlockHandle {
+    uint64 offset = 1;
+    uint64 size   = 2;
+}
+
+message IndexEntry {
+    bytes unshared_key  = 1;       
+    uint32 shared_key_len = 2;      
+    BlockHandle block_handle = 3;  
+}
+
+message DataBlock {
+    repeated BlockEntry entries = 1;
+    repeated uint32 restart_points = 2;
+    uint32 restart_count = 3;
+}
+
+message IndexBlock {
+    repeated IndexEntry entries = 1;
+    repeated uint32 restart_points = 2;
+    uint32 restart_count = 3;
+}

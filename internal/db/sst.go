@@ -149,7 +149,7 @@ func Create(filename string) (SSTable, error) {
 //		return nil
 //	}
 
-type Block struct {
+type blockInfo struct {
 	EntryCount uint32
 	Size       uint32
 	Offset     uint32
@@ -157,9 +157,9 @@ type Block struct {
 
 // writeBlock writes the given memtable data as blocks to the SSTable file.
 // it returns the written Block metadata.
-func (sst *fileSSTable) writeBlock(offset uint32, memTable []MemTableData) (Block, error) {
+func (sst *fileSSTable) writeBlock(offset uint32, memTable []MemTableData) (blockInfo, error) {
 
-	var block Block
+	var block blockInfo
 	var restartPointKey []byte
 	var bfSize uint32 = 4 // restart points + restart count
 	var restartPoints []uint32
@@ -230,7 +230,7 @@ func (sst *fileSSTable) writeBlock(offset uint32, memTable []MemTableData) (Bloc
 func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 	i := 0
 	offset := uint32(0)
-	indexBlock := make(map[string]Block)
+	// indexBlock := make(map[string]BlockHandle)
 	for i < len(memTable) {
 		// check if memtable is sorted never just assume it is sorted
 		if i != len(memTable)-1 && memTable[i].Key > memTable[i+1].Key {
@@ -245,14 +245,16 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 		sst.blockBuffer.WriteTo(sst.Writer)
 		sst.blockBuffer.Reset()
 
-		// write index entry
-		indexBlock[memTable[i].Key] = block
+		// write index entry - write it to an index buffer first
+		// indexBlock[memTable[i].Key] = blockInfo
 
 		// write to index block
 		i += int(block.EntryCount)
 		offset = block.Offset
 	}
-	// write index block
+
+	// index block
+	// TODO: NEXT - write out index block
 
 	return 0, nil
 }

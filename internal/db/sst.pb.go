@@ -83,6 +83,250 @@ func (x *BlockEntry) GetValue() []byte {
 	return nil
 }
 
+type BlockHandle struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Offset uint64 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
+	Size   uint64 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+}
+
+func (x *BlockHandle) Reset() {
+	*x = BlockHandle{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_sst_proto_msgTypes[1]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *BlockHandle) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BlockHandle) ProtoMessage() {}
+
+func (x *BlockHandle) ProtoReflect() protoreflect.Message {
+	mi := &file_sst_proto_msgTypes[1]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BlockHandle.ProtoReflect.Descriptor instead.
+func (*BlockHandle) Descriptor() ([]byte, []int) {
+	return file_sst_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *BlockHandle) GetOffset() uint64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *BlockHandle) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+type IndexEntry struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	UnsharedKey  []byte       `protobuf:"bytes,1,opt,name=unshared_key,json=unsharedKey,proto3" json:"unshared_key,omitempty"`
+	SharedKeyLen uint32       `protobuf:"varint,2,opt,name=shared_key_len,json=sharedKeyLen,proto3" json:"shared_key_len,omitempty"`
+	BlockHandle  *BlockHandle `protobuf:"bytes,3,opt,name=block_handle,json=blockHandle,proto3" json:"block_handle,omitempty"`
+}
+
+func (x *IndexEntry) Reset() {
+	*x = IndexEntry{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_sst_proto_msgTypes[2]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *IndexEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IndexEntry) ProtoMessage() {}
+
+func (x *IndexEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_sst_proto_msgTypes[2]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IndexEntry.ProtoReflect.Descriptor instead.
+func (*IndexEntry) Descriptor() ([]byte, []int) {
+	return file_sst_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *IndexEntry) GetUnsharedKey() []byte {
+	if x != nil {
+		return x.UnsharedKey
+	}
+	return nil
+}
+
+func (x *IndexEntry) GetSharedKeyLen() uint32 {
+	if x != nil {
+		return x.SharedKeyLen
+	}
+	return 0
+}
+
+func (x *IndexEntry) GetBlockHandle() *BlockHandle {
+	if x != nil {
+		return x.BlockHandle
+	}
+	return nil
+}
+
+type DataBlock struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Entries       []*BlockEntry `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	RestartPoints []uint32      `protobuf:"varint,2,rep,packed,name=restart_points,json=restartPoints,proto3" json:"restart_points,omitempty"`
+	RestartCount  uint32        `protobuf:"varint,3,opt,name=restart_count,json=restartCount,proto3" json:"restart_count,omitempty"`
+}
+
+func (x *DataBlock) Reset() {
+	*x = DataBlock{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_sst_proto_msgTypes[3]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *DataBlock) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataBlock) ProtoMessage() {}
+
+func (x *DataBlock) ProtoReflect() protoreflect.Message {
+	mi := &file_sst_proto_msgTypes[3]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataBlock.ProtoReflect.Descriptor instead.
+func (*DataBlock) Descriptor() ([]byte, []int) {
+	return file_sst_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *DataBlock) GetEntries() []*BlockEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *DataBlock) GetRestartPoints() []uint32 {
+	if x != nil {
+		return x.RestartPoints
+	}
+	return nil
+}
+
+func (x *DataBlock) GetRestartCount() uint32 {
+	if x != nil {
+		return x.RestartCount
+	}
+	return 0
+}
+
+type IndexBlock struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Entries       []*IndexEntry `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	RestartPoints []uint32      `protobuf:"varint,2,rep,packed,name=restart_points,json=restartPoints,proto3" json:"restart_points,omitempty"`
+	RestartCount  uint32        `protobuf:"varint,3,opt,name=restart_count,json=restartCount,proto3" json:"restart_count,omitempty"`
+}
+
+func (x *IndexBlock) Reset() {
+	*x = IndexBlock{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_sst_proto_msgTypes[4]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *IndexBlock) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IndexBlock) ProtoMessage() {}
+
+func (x *IndexBlock) ProtoReflect() protoreflect.Message {
+	mi := &file_sst_proto_msgTypes[4]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IndexBlock.ProtoReflect.Descriptor instead.
+func (*IndexBlock) Descriptor() ([]byte, []int) {
+	return file_sst_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *IndexBlock) GetEntries() []*IndexEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *IndexBlock) GetRestartPoints() []uint32 {
+	if x != nil {
+		return x.RestartPoints
+	}
+	return nil
+}
+
+func (x *IndexBlock) GetRestartCount() uint32 {
+	if x != nil {
+		return x.RestartCount
+	}
+	return 0
+}
+
 var File_sst_proto protoreflect.FileDescriptor
 
 var file_sst_proto_rawDesc = []byte{
@@ -93,8 +337,38 @@ var file_sst_proto_rawDesc = []byte{
 	0x79, 0x12, 0x24, 0x0a, 0x0e, 0x73, 0x68, 0x61, 0x72, 0x65, 0x64, 0x5f, 0x6b, 0x65, 0x79, 0x5f,
 	0x6c, 0x65, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x0c, 0x73, 0x68, 0x61, 0x72, 0x65,
 	0x64, 0x4b, 0x65, 0x79, 0x4c, 0x65, 0x6e, 0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65,
-	0x18, 0x03, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x42, 0x07, 0x5a,
-	0x05, 0x2e, 0x2f, 0x3b, 0x64, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x18, 0x03, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x22, 0x39, 0x0a,
+	0x0b, 0x42, 0x6c, 0x6f, 0x63, 0x6b, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x12, 0x16, 0x0a, 0x06,
+	0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x04, 0x52, 0x06, 0x6f, 0x66,
+	0x66, 0x73, 0x65, 0x74, 0x12, 0x12, 0x0a, 0x04, 0x73, 0x69, 0x7a, 0x65, 0x18, 0x02, 0x20, 0x01,
+	0x28, 0x04, 0x52, 0x04, 0x73, 0x69, 0x7a, 0x65, 0x22, 0x8a, 0x01, 0x0a, 0x0a, 0x49, 0x6e, 0x64,
+	0x65, 0x78, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x12, 0x21, 0x0a, 0x0c, 0x75, 0x6e, 0x73, 0x68, 0x61,
+	0x72, 0x65, 0x64, 0x5f, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x0b, 0x75,
+	0x6e, 0x73, 0x68, 0x61, 0x72, 0x65, 0x64, 0x4b, 0x65, 0x79, 0x12, 0x24, 0x0a, 0x0e, 0x73, 0x68,
+	0x61, 0x72, 0x65, 0x64, 0x5f, 0x6b, 0x65, 0x79, 0x5f, 0x6c, 0x65, 0x6e, 0x18, 0x02, 0x20, 0x01,
+	0x28, 0x0d, 0x52, 0x0c, 0x73, 0x68, 0x61, 0x72, 0x65, 0x64, 0x4b, 0x65, 0x79, 0x4c, 0x65, 0x6e,
+	0x12, 0x33, 0x0a, 0x0c, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x5f, 0x68, 0x61, 0x6e, 0x64, 0x6c, 0x65,
+	0x18, 0x03, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x10, 0x2e, 0x73, 0x73, 0x74, 0x2e, 0x42, 0x6c, 0x6f,
+	0x63, 0x6b, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x52, 0x0b, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x48,
+	0x61, 0x6e, 0x64, 0x6c, 0x65, 0x22, 0x82, 0x01, 0x0a, 0x09, 0x44, 0x61, 0x74, 0x61, 0x42, 0x6c,
+	0x6f, 0x63, 0x6b, 0x12, 0x29, 0x0a, 0x07, 0x65, 0x6e, 0x74, 0x72, 0x69, 0x65, 0x73, 0x18, 0x01,
+	0x20, 0x03, 0x28, 0x0b, 0x32, 0x0f, 0x2e, 0x73, 0x73, 0x74, 0x2e, 0x42, 0x6c, 0x6f, 0x63, 0x6b,
+	0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x07, 0x65, 0x6e, 0x74, 0x72, 0x69, 0x65, 0x73, 0x12, 0x25,
+	0x0a, 0x0e, 0x72, 0x65, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x73,
+	0x18, 0x02, 0x20, 0x03, 0x28, 0x0d, 0x52, 0x0d, 0x72, 0x65, 0x73, 0x74, 0x61, 0x72, 0x74, 0x50,
+	0x6f, 0x69, 0x6e, 0x74, 0x73, 0x12, 0x23, 0x0a, 0x0d, 0x72, 0x65, 0x73, 0x74, 0x61, 0x72, 0x74,
+	0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x0c, 0x72, 0x65,
+	0x73, 0x74, 0x61, 0x72, 0x74, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x22, 0x83, 0x01, 0x0a, 0x0a, 0x49,
+	0x6e, 0x64, 0x65, 0x78, 0x42, 0x6c, 0x6f, 0x63, 0x6b, 0x12, 0x29, 0x0a, 0x07, 0x65, 0x6e, 0x74,
+	0x72, 0x69, 0x65, 0x73, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x0f, 0x2e, 0x73, 0x73, 0x74,
+	0x2e, 0x49, 0x6e, 0x64, 0x65, 0x78, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x07, 0x65, 0x6e, 0x74,
+	0x72, 0x69, 0x65, 0x73, 0x12, 0x25, 0x0a, 0x0e, 0x72, 0x65, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f,
+	0x70, 0x6f, 0x69, 0x6e, 0x74, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0d, 0x52, 0x0d, 0x72, 0x65,
+	0x73, 0x74, 0x61, 0x72, 0x74, 0x50, 0x6f, 0x69, 0x6e, 0x74, 0x73, 0x12, 0x23, 0x0a, 0x0d, 0x72,
+	0x65, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x03, 0x20, 0x01,
+	0x28, 0x0d, 0x52, 0x0c, 0x72, 0x65, 0x73, 0x74, 0x61, 0x72, 0x74, 0x43, 0x6f, 0x75, 0x6e, 0x74,
+	0x42, 0x07, 0x5a, 0x05, 0x2e, 0x2f, 0x3b, 0x64, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f,
+	0x33,
 }
 
 var (
@@ -109,16 +383,23 @@ func file_sst_proto_rawDescGZIP() []byte {
 	return file_sst_proto_rawDescData
 }
 
-var file_sst_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_sst_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_sst_proto_goTypes = []interface{}{
-	(*BlockEntry)(nil), // 0: sst.BlockEntry
+	(*BlockEntry)(nil),  // 0: sst.BlockEntry
+	(*BlockHandle)(nil), // 1: sst.BlockHandle
+	(*IndexEntry)(nil),  // 2: sst.IndexEntry
+	(*DataBlock)(nil),   // 3: sst.DataBlock
+	(*IndexBlock)(nil),  // 4: sst.IndexBlock
 }
 var file_sst_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	1, // 0: sst.IndexEntry.block_handle:type_name -> sst.BlockHandle
+	0, // 1: sst.DataBlock.entries:type_name -> sst.BlockEntry
+	2, // 2: sst.IndexBlock.entries:type_name -> sst.IndexEntry
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_sst_proto_init() }
@@ -139,6 +420,54 @@ func file_sst_proto_init() {
 				return nil
 			}
 		}
+		file_sst_proto_msgTypes[1].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*BlockHandle); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_sst_proto_msgTypes[2].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*IndexEntry); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_sst_proto_msgTypes[3].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*DataBlock); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_sst_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*IndexBlock); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -146,7 +475,7 @@ func file_sst_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_sst_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
