@@ -155,14 +155,15 @@ type blockInfo struct {
 	Offset     uint32
 }
 
-// writeBlock writes the given memtable data as blocks to the SSTable file.
-// it returns the written Block metadata.
-func (sst *fileSSTable) writeBlock(offset uint32, memTable []MemTableData) (blockInfo, error) {
+// createDataBlock creates a data block from the given memtable data starting at the given offset.
+func (sst *fileSSTable) createDataBlock(memTable []MemTableData) (*DataBlock, error) {
 
-	var block blockInfo
 	var restartPointKey []byte
-	var bfSize uint32 = 4 // restart points + restart count
+	var bfSize uint32 = 4 // restart count size in bytes
 	var restartPoints []uint32
+	block := &DataBlock{}
+	bSize := uint32(0)
+	offset := uint32(0)
 	for i, m := range memTable {
 		// shared key length
 		s := 0
@@ -187,43 +188,29 @@ func (sst *fileSSTable) writeBlock(offset uint32, memTable []MemTableData) (bloc
 			SharedKeyLen: uint32(s),
 			Value:        []byte(m.Value),
 		}
-		if block.Size+uint32(sst.protoEncoder.EncodeSize(record))+bfSize > blockSize {
+		recordSize := uint32(sst.protoEncoder.EncodeSize(record))
+		if bSize+recordSize+bfSize > blockSize {
 			// record would exceed block size
 			// TODO: allow for overflows blocks later as these limits the size of values we can store
 			break
 		}
 		// encoder is setup to write to block buffer
-		n, err := sst.protoEncoder.Encode(record)
-		if err != nil {
-			return block, err
-		}
-		block.EntryCount++
-		block.Size += uint32(n)
-
-	}
-	// write restart points, restart count and checksum
-	for _, rp := range restartPoints {
-		if err := binary.Write(sst.blockBuffer, binary.LittleEndian, rp); err != nil {
-			return block, fmt.Errorf("failed to write restart point: %w", err)
-		}
-	}
-	if err := binary.Write(sst.blockBuffer, binary.LittleEndian, uint32(len(restartPoints))); err != nil {
-		return block, fmt.Errorf("failed to write restart count: %w", err)
+		block.Entries = append(block.Entries, record)
+		offset += recordSize
+		bSize += recordSize
 	}
 
-	h := crc32.NewIEEE()
-	if _, err := h.Write(sst.blockBuffer.Bytes()); err != nil {
-		return block, fmt.Errorf("failed to compute checksum: %w", err)
-	}
-	checksum := h.Sum32()
-	if err := binary.Write(sst.blockBuffer, binary.LittleEndian, checksum); err != nil {
-		return block, fmt.Errorf("failed to write checksum: %w", err)
-	}
-
-	block.Size += bfSize
-	block.Offset = offset + block.Size + 4 // 4 bytes for checksum
-
+	block.RestartCount = uint32(len(restartPoints))
+	block.RestartPoints = restartPoints
 	return block, nil
+}
+
+func calculateChecksum(data []byte) (uint32, error) {
+	h := crc32.NewIEEE()
+	if _, err := h.Write(data); err != nil {
+		return 0, err
+	}
+	return h.Sum32(), nil
 }
 
 // Flush flushes memtable data to SSTable and returns the number of records written
@@ -231,31 +218,95 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 	i := 0
 	offset := uint32(0)
 	// indexBlock := make(map[string]BlockHandle)
+	indexBlock := &IndexBlock{}
+	indexEntryCount := 0
+	indexBlockOffset := uint32(0)
+	var restartPointKey []byte
+	var bfSize uint32 = 4 // restart count size in bytes
+	var restartPoints []uint32
+
 	for i < len(memTable) {
+		// reset block buffer
+		sst.blockBuffer.Reset()
+		s := 0
+		if indexEntryCount%int(sst.brc) == 0 {
+			restartPoints = append(restartPoints, indexBlockOffset)
+			restartPointKey = []byte(memTable[i].Key)
+			bfSize += 4
+			s = len(restartPointKey)
+		}
+		if s == 0 {
+			for _, b := range restartPointKey {
+				if s >= len(memTable[i].Key) || memTable[i].Key[s] != b {
+					break
+				}
+				s++
+			}
+		}
 		// check if memtable is sorted never just assume it is sorted
 		if i != len(memTable)-1 && memTable[i].Key > memTable[i+1].Key {
 			return uint32(i), ErrMemTableUnsorted
 		}
 
-		block, err := sst.writeBlock(offset, memTable[i:])
+		block, err := sst.createDataBlock(memTable[i:])
 		if err != nil {
 			return uint32(i), err
 		}
 
-		// write block to file
-		sst.blockBuffer.WriteTo(sst.Writer)
-		sst.blockBuffer.Reset()
+		// write block to buffer
+		blockSize := uint32(sst.protoEncoder.EncodeSize(block))
+		if _, err := sst.protoEncoder.Encode(block); err != nil {
+			return uint32(i), err
+		}
 
-		// write index entry - write it to an index buffer first
-		// indexBlock[memTable[i].Key] = blockInfo
+		// write checksum to buffer
+		checkSum, err := calculateChecksum(sst.blockBuffer.Bytes())
+		if err != nil {
+			return uint32(i), fmt.Errorf("failed to compute checksum: %w", err)
+		}
+		if err := binary.Write(sst.blockBuffer, binary.LittleEndian, checkSum); err != nil {
+			return uint32(i), fmt.Errorf("failed to write checksum: %w", err)
+		}
 
-		// write to index block
-		i += int(block.EntryCount)
-		offset = block.Offset
+		// flush block buffer to file
+		if _, err := sst.blockBuffer.WriteTo(sst.Writer); err != nil {
+			return uint32(i), fmt.Errorf("failed to write block to file: %w", err)
+		}
+
+		indexEntry := &IndexEntry{
+			UnsharedKey:  []byte(memTable[i].Key)[s:],
+			SharedKeyLen: uint32(s),
+			BlockHandle: &BlockHandle{
+				Offset: uint64(offset),
+				Size:   uint64(blockSize),
+			},
+		}
+		indexBlock.Entries = append(indexBlock.Entries, indexEntry)
+		offset += blockSize + 4 // 4 bytes for checksum
+		i += len(block.Entries)
 	}
 
-	// index block
-	// TODO: NEXT - write out index block
+	sst.blockBuffer.Reset()
+	indexBlock.RestartPoints = restartPoints
+	indexBlock.RestartCount = uint32(len(restartPoints))
+	// write index block to buffer
+	sst.protoEncoder.Encode(indexBlock)
+
+	// write checksum to buffer
+	checksum, err := calculateChecksum(sst.blockBuffer.Bytes())
+	if err != nil {
+		return uint32(i), fmt.Errorf("failed to compute checksum for index block: %w", err)
+	}
+	if err := binary.Write(sst.blockBuffer, binary.LittleEndian, checksum); err != nil {
+		return uint32(i), fmt.Errorf("failed to write checksum for index block: %w", err)
+	}
+
+	// flush index block to file
+	sst.blockBuffer.WriteTo(sst.Writer)
+
+	// TODO: NEXT - write out index metadata to find index block offset and size
+
+	sst.blockBuffer.Reset()
 
 	return 0, nil
 }
