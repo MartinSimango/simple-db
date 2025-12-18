@@ -32,3 +32,10 @@ message IndexBlock {
     repeated uint32 restart_points = 2;
     uint32 restart_count = 3;
 }
+
+
+message Footer {
+    BlockHandle blockHandle = 1;
+    uint32 Version     = 2;
+    uint64 Magic       = 3;
+}

@@ -53,6 +53,15 @@ func (p *ProtoEncoder) Encode(msg proto.Message) (n int, err error) {
 
 }
 
+func (p *ProtoEncoder) EncodeWithoutSize(msg proto.Message) (n int, err error) {
+	bytes, err := proto.Marshal(msg)
+	if err != nil {
+		return 0, err
+	}
+	n, err = p.w.Write(bytes)
+	return n, err
+}
+
 // EncodeSize returns the size in bytes that the encoded message will take
 func (p *ProtoEncoder) EncodeSize(msg proto.Message) int {
 	return proto.Size(msg) + int(unsafe.Sizeof(proto.Size(msg)))

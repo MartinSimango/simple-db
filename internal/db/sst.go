@@ -12,6 +12,10 @@ import (
 	"os"
 )
 
+const Magic uint64 = 0x53494D504C454442 // "SIMPLEDB" in hex
+
+const version uint32 = 1
+
 var ErrMemTableUnsorted = errors.New("memtable data is not sorted")
 
 type SSTable interface {
@@ -290,23 +294,43 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 	indexBlock.RestartPoints = restartPoints
 	indexBlock.RestartCount = uint32(len(restartPoints))
 	// write index block to buffer
-	sst.protoEncoder.Encode(indexBlock)
+	indexBlockSize, err := sst.protoEncoder.Encode(indexBlock)
+	if err != nil {
+		return uint32(i), fmt.Errorf("failed to write index block to buffer: %w", err)
+	}
 
 	// write checksum to buffer
 	checksum, err := calculateChecksum(sst.blockBuffer.Bytes())
 	if err != nil {
-		return uint32(i), fmt.Errorf("failed to compute checksum for index block: %w", err)
+		return uint32(i + indexBlockSize), fmt.Errorf("failed to compute checksum for index block: %w", err)
 	}
 	if err := binary.Write(sst.blockBuffer, binary.LittleEndian, checksum); err != nil {
-		return uint32(i), fmt.Errorf("failed to write checksum for index block: %w", err)
+		return uint32(i + indexBlockSize), fmt.Errorf("failed to write checksum for index block: %w", err)
 	}
 
 	// flush index block to file
 	sst.blockBuffer.WriteTo(sst.Writer)
 
-	// TODO: NEXT - write out index metadata to find index block offset and size
-
 	sst.blockBuffer.Reset()
+	footer := &Footer{
+		BlockHandle: &BlockHandle{
+			Offset: uint64(offset),
+			Size:   uint64(indexBlockSize) + 4, // +4 for checksum
+		},
+		Magic:   Magic,
+		Version: version,
+	}
+	// write footer to buffer (28 bytes)
+	if _, err = sst.protoEncoder.EncodeWithoutSize(footer); err != nil {
+		return uint32(i + indexBlockSize), fmt.Errorf("failed to write footer to buffer: %w", err)
+	}
+
+	if _, err := sst.blockBuffer.WriteTo(sst.Writer); err != nil {
+		return uint32(i + indexBlockSize), fmt.Errorf("failed to write footer to file: %w", err)
+	}
+	if err := sst.Writer.Flush(); err != nil {
+		return uint32(i + indexBlockSize), fmt.Errorf("failed to flush writer: %w", err)
+	}
 
 	return 0, nil
 }
