@@ -31,20 +31,8 @@ type SSTable interface {
 // For the purpose of this example, we will leave it as a placeholder.
 
 const (
-	blockSize      = 4 * 1024                 // 4KB block size
-	maxTableSize   = 1 << 20                  // 1MB max SSTable size
-	indexEntrySize = maxTableSize / blockSize // number of index entries
+	blockSize = 4 * 1024 // 4KB block size
 )
-
-// data block entry structure in file
-// [key (bytes)][shared key count (varint)][unshared key count (varint)][value length (varint)][value (bytes)]
-// | Entry  | Shared    | Unshared | Value |
-// | ------ | --------- | -------- | ----- |
-// | apple  | 0         | 5        | "v1"  |
-// | banana | 1 ("a")   | 5        | "v2"  |
-// | band   | 3 ("ban") | 1        | "v3"  |
-// | bark   | 3 ("bar") | 1        | "v4"  |
-// | cat    | 0         | 3        | "v5"  |
 
 // data block structure
 // data block entry 1
@@ -90,16 +78,6 @@ type SSTableBlock struct {
 	checksum      uint32
 }
 
-// file structure
-// data block 0
-// data block 1
-// ...
-// data block n
-// index block
-// footer (contains index block offset and size) - will be fixed size
-// index block offset
-// index block size
-
 type fileSSTable struct {
 	file *os.File
 	*bufio.Writer
@@ -113,8 +91,8 @@ type fileSSTable struct {
 
 var _ SSTable = (*fileSSTable)(nil)
 
-// Create creates a new SSTable file with the given filename.
-func Create(filename string) (SSTable, error) {
+// CreateSSTable creates a new SSTable file with the given filename.
+func CreateSSTable(filename string) (SSTable, error) {
 	f, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
@@ -133,30 +111,6 @@ func Create(filename string) (SSTable, error) {
 	sst.protoEncoder = NewProtoEncoder(sst.blockBuffer)
 	sst.protoDecoder = NewProtoDecoder(sst.Reader)
 	return sst, nil
-}
-
-//	func (w *WalFile) WriteRecord(record *WalRecord) error {
-//		w.mu.Lock()
-//		defer w.mu.Unlock()
-//		// make size of record is 2^16 bytes - 65536 bytes - limit set by simpledb
-//		if err := binary.Write(w.file, binary.LittleEndian, uint16(proto.Size(record))); err != nil {
-//			return err
-//		}
-//		bytes, err := proto.Marshal(record)
-//		if err != nil {
-//			return err // TODO: now file is corrupted as size is written but data is not - remediate this
-//		}
-//		_, err = w.file.Write(bytes)
-//		if err != nil {
-//			return err
-//		}
-//		return nil
-//	}
-
-type blockInfo struct {
-	EntryCount uint32
-	Size       uint32
-	Offset     uint32
 }
 
 // createDataBlock creates a data block from the given memtable data starting at the given offset.
@@ -348,16 +302,3 @@ func (sst *fileSSTable) GetPrefix(ctx context.Context, prefix string) map[string
 func (sst *fileSSTable) Close() error {
 	return sst.file.Close()
 }
-
-// func (sst *SSTable) read(key string) (string, bool) {
-// 	return "", false
-// }
-
-// SST table struct
-
-// Blocke
-// t index
-
-// Compaction logic
-
-// algorithm

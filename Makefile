@@ -24,3 +24,11 @@ sdb-test-install:
 # Run binaries
 sdb-run: 
 	go run cmd/sdb/main.go
+
+
+$(GOPATH)/bin/pkgsite: 
+	go install golang.org/x/pkgsite/cmd/pkgsite@latest
+
+
+pkgsite: $(GOPATH)/bin/pkgsite
+	pkgsite -http=:8080 
