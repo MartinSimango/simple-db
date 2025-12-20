@@ -1,5 +1,5 @@
-//go:generate protoc --go_out=. sst.proto
-package db
+//go:generate protoc --go_out=../ sst.proto -I=../ -I=.
+package sst
 
 import (
 	"bufio"
@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+
+	"github.com/MartinSimango/simple-db/internal/db/encoding/proto"
+	"github.com/MartinSimango/simple-db/internal/db/memtable"
 )
 
 const Magic uint64 = 0x53494D504C454442 // "SIMPLEDB" in hex
@@ -19,7 +22,7 @@ const version uint32 = 1
 var ErrMemTableUnsorted = errors.New("memtable data is not sorted")
 
 type SSTable interface {
-	Flush(memTable []MemTableData) (uint32, error)
+	Flush(memTable memtable.Table) (uint32, error)
 	Get(ctx context.Context, key string) (string, bool)
 	GetPrefix(ctx context.Context, prefix string) map[string]string
 	Close() error
@@ -84,15 +87,15 @@ type fileSSTable struct {
 	*bufio.Reader
 	filename     string
 	brc          uint8
-	protoEncoder *ProtoEncoder
-	protoDecoder *ProtoDecoder
+	protoEncoder *proto.Encoder
+	protoDecoder *proto.Decoder
 	blockBuffer  *bytes.Buffer
 }
 
 var _ SSTable = (*fileSSTable)(nil)
 
 // CreateSSTable creates a new SSTable file with the given filename.
-func CreateSSTable(filename string) (SSTable, error) {
+func Create(filename string) (SSTable, error) {
 	f, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
@@ -108,13 +111,13 @@ func CreateSSTable(filename string) (SSTable, error) {
 		brc:         8, // default restart count TODO: make configurable
 		blockBuffer: bytes.NewBuffer(make([]byte, 0, blockSize)),
 	}
-	sst.protoEncoder = NewProtoEncoder(sst.blockBuffer)
-	sst.protoDecoder = NewProtoDecoder(sst.Reader)
+	sst.protoEncoder = proto.NewEncoder(sst.blockBuffer)
+	sst.protoDecoder = proto.NewDecoder(sst.Reader)
 	return sst, nil
 }
 
 // createDataBlock creates a data block from the given memtable data starting at the given offset.
-func (sst *fileSSTable) createDataBlock(memTable []MemTableData) (*DataBlock, error) {
+func (sst *fileSSTable) createDataBlock(mtIterator memtable.Iterator) (*DataBlock, error) {
 
 	var restartPointKey []byte
 	var bfSize uint32 = 4 // restart count size in bytes
@@ -122,8 +125,11 @@ func (sst *fileSSTable) createDataBlock(memTable []MemTableData) (*DataBlock, er
 	block := &DataBlock{}
 	bSize := uint32(0)
 	offset := uint32(0)
-	for i, m := range memTable {
+	i := 0
+	for mtIterator.HasNext() {
+		m := mtIterator.Data()
 		// shared key length
+
 		s := 0
 		if i%int(sst.brc) == 0 {
 			restartPoints = append(restartPoints, offset)
@@ -144,8 +150,10 @@ func (sst *fileSSTable) createDataBlock(memTable []MemTableData) (*DataBlock, er
 		record := &BlockEntry{
 			UnsharedKey:  []byte(m.Key)[s:],
 			SharedKeyLen: uint32(s),
-			Value:        []byte(m.Value),
+			Value:        []byte(m.Value.Value),
+			RecordType:   m.RecordType,
 		}
+
 		recordSize := uint32(sst.protoEncoder.EncodeSize(record))
 		if bSize+recordSize+bfSize > blockSize {
 			// record would exceed block size
@@ -156,6 +164,8 @@ func (sst *fileSSTable) createDataBlock(memTable []MemTableData) (*DataBlock, er
 		block.Entries = append(block.Entries, record)
 		offset += recordSize
 		bSize += recordSize
+		mtIterator.Next()
+		i++
 	}
 
 	block.RestartCount = uint32(len(restartPoints))
@@ -172,7 +182,7 @@ func calculateChecksum(data []byte) (uint32, error) {
 }
 
 // Flush flushes memtable data to SSTable and returns the number of records written
-func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
+func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 	i := 0
 	offset := uint32(0)
 	// indexBlock := make(map[string]BlockHandle)
@@ -183,37 +193,35 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 	var bfSize uint32 = 4 // restart count size in bytes
 	var restartPoints []uint32
 
-	for i < len(memTable) {
+	for mtIterator.HasNext() {
 		// reset block buffer
 		sst.blockBuffer.Reset()
 		s := 0
+		memTableData := mtIterator.Data()
 		if indexEntryCount%int(sst.brc) == 0 {
 			restartPoints = append(restartPoints, indexBlockOffset)
-			restartPointKey = []byte(memTable[i].Key)
+			restartPointKey = []byte(memTableData.Key)
 			bfSize += 4
 			s = len(restartPointKey)
 		}
 		if s == 0 {
 			for _, b := range restartPointKey {
-				if s >= len(memTable[i].Key) || memTable[i].Key[s] != b {
+				if s >= len(memTableData.Key) || memTableData.Key[s] != b {
 					break
 				}
 				s++
 			}
 		}
-		// check if memtable is sorted never just assume it is sorted
-		if i != len(memTable)-1 && memTable[i].Key > memTable[i+1].Key {
-			return uint32(i), ErrMemTableUnsorted
-		}
 
-		block, err := sst.createDataBlock(memTable[i:])
+		block, err := sst.createDataBlock(mtIterator)
 		if err != nil {
 			return uint32(i), err
 		}
 
 		// write block to buffer
-		blockSize := uint32(sst.protoEncoder.EncodeSize(block))
-		if _, err := sst.protoEncoder.Encode(block); err != nil {
+
+		blockSize, err := sst.protoEncoder.Encode(block)
+		if err != nil {
 			return uint32(i), err
 		}
 
@@ -226,7 +234,7 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 			return uint32(i), fmt.Errorf("failed to write checksum: %w", err)
 		}
 
-		// flush block buffer to file
+		//flush block buffer to file
 		if _, err := sst.blockBuffer.WriteTo(sst.Writer); err != nil {
 			return uint32(i), fmt.Errorf("failed to write block to file: %w", err)
 		}
@@ -240,7 +248,7 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 			},
 		}
 		indexBlock.Entries = append(indexBlock.Entries, indexEntry)
-		offset += blockSize + 4 // 4 bytes for checksum
+		offset += uint32(blockSize) + 4 // 4 bytes for checksum
 		i += len(block.Entries)
 	}
 
@@ -275,7 +283,7 @@ func (sst *fileSSTable) Flush(memTable []MemTableData) (uint32, error) {
 		Version: version,
 	}
 	// write footer to buffer (28 bytes)
-	if _, err = sst.protoEncoder.EncodeWithoutSize(footer); err != nil {
+	if _, err = sst.protoEncoder.Encode(footer); err != nil {
 		return uint32(i + indexBlockSize), fmt.Errorf("failed to write footer to buffer: %w", err)
 	}
 
@@ -300,5 +308,8 @@ func (sst *fileSSTable) GetPrefix(ctx context.Context, prefix string) map[string
 }
 
 func (sst *fileSSTable) Close() error {
-	return sst.file.Close()
+	if sst.file != nil {
+		return sst.file.Close()
+	}
+	return nil
 }

@@ -1,7 +1,8 @@
 syntax = "proto3";
 
-package wal;
-option go_package = "./;db";
+package db;
+option go_package = "github.com/MartinSimango/simple-db/internal/db;db";
+
 
 
 // Represents the type of WAL record, similar to your RecordType enum.
@@ -11,8 +12,7 @@ enum RecordType {
     DELETE = 2;
 }
 
-// A single WAL entry.
-message WalRecord {
+message Record {
     RecordType record_type = 1;
     string key = 2;
     string value = 3; // empty for deletes

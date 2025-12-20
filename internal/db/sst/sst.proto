@@ -1,13 +1,16 @@
 syntax = "proto3";
 
 package sst;
-option go_package = "./;db";
+option go_package = "sst/;sst";
 
+import "record.proto";
 
 message BlockEntry {
     bytes unshared_key = 1;
     uint32 shared_key_len = 2;
     bytes value = 3;
+    db.RecordType record_type = 4;
+
 }
 
 message BlockHandle {

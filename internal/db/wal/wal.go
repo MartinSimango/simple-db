@@ -1,5 +1,4 @@
-//go:generate protoc --go_out=. wal.proto
-package db
+package wal
 
 import (
 	"sync"
@@ -7,19 +6,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/MartinSimango/simple-db/internal/db"
+	"github.com/MartinSimango/simple-db/internal/db/encoding/proto"
 )
 
 type WalFile struct {
 	file         *os.File
 	mu           sync.Mutex
-	protoEncoder *ProtoEncoder
-	protoDecoder *ProtoDecoder
+	protoEncoder *proto.Encoder
+	protoDecoder *proto.Decoder
 }
-
-const (
-	RecordTypePut    RecordType = 1
-	RecordTypeDelete RecordType = 2
-)
 
 func NewWalFile(simpleDbDir, walFileName string) (*WalFile, error) {
 	homeDir, err := os.UserHomeDir()
@@ -39,13 +36,13 @@ func NewWalFile(simpleDbDir, walFileName string) (*WalFile, error) {
 	}
 	w := &WalFile{
 		file:         file,
-		protoEncoder: NewProtoEncoder(file),
-		protoDecoder: NewProtoDecoder(file),
+		protoEncoder: proto.NewEncoder(file),
+		protoDecoder: proto.NewDecoder(file),
 	}
 	return w, nil
 }
 
-func (w *WalFile) WriteRecord(record *WalRecord) error {
+func (w *WalFile) WriteRecord(record *db.Record) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	_, err := w.protoEncoder.Encode(record)
@@ -53,8 +50,8 @@ func (w *WalFile) WriteRecord(record *WalRecord) error {
 
 }
 
-func (w *WalFile) ReadRecords() ([]*WalRecord, error) {
-	var records []*WalRecord
+func (w *WalFile) ReadRecords() ([]*db.Record, error) {
+	var records []*db.Record
 	// var buf bytes.Buffer
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return nil, err
@@ -62,7 +59,7 @@ func (w *WalFile) ReadRecords() ([]*WalRecord, error) {
 
 	// TODO: compare if making a fixed buffer vs allocating every time is better
 	for {
-		var record WalRecord
+		var record db.Record
 
 		err := w.protoDecoder.Decode(&record)
 		if err == io.EOF {
