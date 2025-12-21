@@ -40,3 +40,4 @@ sdb-test
 !sdb/
 
 test-write.sh
+*.sdb

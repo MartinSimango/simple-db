@@ -9,6 +9,7 @@ import (
 	"github.com/MartinSimango/simple-db/internal/db/sst"
 )
 
+// TODO: need to mock memtable and test various scenarios
 func TestSSTable_Flush(t *testing.T) {
 
 	// f, err := os.CreateTemp(t.TempDir(), "sstable.sdb")

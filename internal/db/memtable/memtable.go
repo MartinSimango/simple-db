@@ -186,10 +186,10 @@ func (mt *mapMemTable) Delete(key string) error {
 	return nil
 }
 
-// recoveryMode enables or disables recovery mode.
+// SetRecoveryMode enables or disables recovery mode.
 //
 // When set to true, this:
-//   - prevents panics from [*mapMemTable.Put] when the memtable is full
+//   - prevents panics from [mapMemTable.Put] when the memtable is full
 func (mt *mapMemTable) SetRecoveryMode(isRecovery bool) {
 	mt.recovery = isRecovery
 }
