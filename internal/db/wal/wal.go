@@ -11,14 +11,14 @@ import (
 	"github.com/MartinSimango/simple-db/internal/db/encoding/proto"
 )
 
-type WalFile struct {
+type File struct {
 	file         *os.File
 	mu           sync.Mutex
 	protoEncoder *proto.Encoder
 	protoDecoder *proto.Decoder
 }
 
-func NewWalFile(simpleDbDir, walFileName string) (*WalFile, error) {
+func NewFile(simpleDbDir, walFileName string) (*File, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -34,7 +34,7 @@ func NewWalFile(simpleDbDir, walFileName string) (*WalFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	w := &WalFile{
+	w := &File{
 		file:         file,
 		protoEncoder: proto.NewEncoder(file),
 		protoDecoder: proto.NewDecoder(file),
@@ -42,18 +42,18 @@ func NewWalFile(simpleDbDir, walFileName string) (*WalFile, error) {
 	return w, nil
 }
 
-func (w *WalFile) WriteRecord(record *db.Record) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	_, err := w.protoEncoder.Encode(record)
+func (f *File) WriteRecord(record *db.Record) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, err := f.protoEncoder.Encode(record)
 	return err
 
 }
 
-func (w *WalFile) ReadRecords() ([]*db.Record, error) {
+func (f *File) ReadRecords() ([]*db.Record, error) {
 	var records []*db.Record
 	// var buf bytes.Buffer
-	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+	if _, err := f.file.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 
@@ -61,7 +61,7 @@ func (w *WalFile) ReadRecords() ([]*db.Record, error) {
 	for {
 		var record db.Record
 
-		err := w.protoDecoder.Decode(&record)
+		err := f.protoDecoder.Decode(&record)
 		if err == io.EOF {
 			break
 		}
@@ -75,17 +75,17 @@ func (w *WalFile) ReadRecords() ([]*db.Record, error) {
 
 }
 
-func (w *WalFile) Truncate() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.file.Sync()
-	w.file.Truncate(0)
-	w.file.Seek(0, io.SeekStart)
+func (f *File) Truncate() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.file.Sync()
+	f.file.Truncate(0)
+	f.file.Seek(0, io.SeekStart)
 }
 
-func (w *WalFile) Close() error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.file.Close()
+func (f *File) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.file.Close()
 
 }

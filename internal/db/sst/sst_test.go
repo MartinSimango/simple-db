@@ -19,17 +19,12 @@ func TestSSTable_Flush(t *testing.T) {
 	}
 	defer sst.Close()
 
-	var memTable []memtable.Data
+	memTable := memtable.NewTable(memtable.MapType)
 	for i := 0; i < 1000; i++ {
-		memTable = append(memTable, memtable.Data{
-			Key: fmt.Sprintf("key%d", i),
-			Value: memtable.Value{
-				RecordType: db.RecordType_PUT,
-				Value:      fmt.Sprintf("value%d", i),
-			},
-		})
+		memTable.Put(db.RecordType_PUT, fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
+
 	}
-	if _, err := sst.Flush(memTable); err != nil {
+	if _, err := sst.Flush(memTable.Iterator()); err != nil {
 		t.Fatalf("failed to flush memtable to sstable: %+v", err)
 	}
 

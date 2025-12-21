@@ -1,4 +1,4 @@
-//go:generate protoc --go_out=../ sst.proto -I=../ -I=.
+//go:generate protoc --go_out=. sst.proto --go_opt=paths=source_relative  -I=../ -I=.
 package sst
 
 import (
@@ -22,7 +22,7 @@ const version uint32 = 1
 var ErrMemTableUnsorted = errors.New("memtable data is not sorted")
 
 type SSTable interface {
-	Flush(memTable memtable.Table) (uint32, error)
+	Flush(memTable memtable.Iterator) (uint32, error)
 	Get(ctx context.Context, key string) (string, bool)
 	GetPrefix(ctx context.Context, prefix string) map[string]string
 	Close() error
@@ -123,7 +123,6 @@ func (sst *fileSSTable) createDataBlock(mtIterator memtable.Iterator) (*DataBloc
 	var bfSize uint32 = 4 // restart count size in bytes
 	var restartPoints []uint32
 	block := &DataBlock{}
-	bSize := uint32(0)
 	offset := uint32(0)
 	i := 0
 	for mtIterator.HasNext() {
@@ -155,7 +154,7 @@ func (sst *fileSSTable) createDataBlock(mtIterator memtable.Iterator) (*DataBloc
 		}
 
 		recordSize := uint32(sst.protoEncoder.EncodeSize(record))
-		if bSize+recordSize+bfSize > blockSize {
+		if offset+recordSize+bfSize > blockSize {
 			// record would exceed block size
 			// TODO: allow for overflows blocks later as these limits the size of values we can store
 			break
@@ -163,7 +162,6 @@ func (sst *fileSSTable) createDataBlock(mtIterator memtable.Iterator) (*DataBloc
 		// encoder is setup to write to block buffer
 		block.Entries = append(block.Entries, record)
 		offset += recordSize
-		bSize += recordSize
 		mtIterator.Next()
 		i++
 	}
@@ -185,34 +183,14 @@ func calculateChecksum(data []byte) (uint32, error) {
 func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 	i := 0
 	offset := uint32(0)
-	// indexBlock := make(map[string]BlockHandle)
 	indexBlock := &IndexBlock{}
-	indexEntryCount := 0
 	indexBlockOffset := uint32(0)
 	var restartPointKey []byte
-	var bfSize uint32 = 4 // restart count size in bytes
 	var restartPoints []uint32
 
 	for mtIterator.HasNext() {
 		// reset block buffer
 		sst.blockBuffer.Reset()
-		s := 0
-		memTableData := mtIterator.Data()
-		if indexEntryCount%int(sst.brc) == 0 {
-			restartPoints = append(restartPoints, indexBlockOffset)
-			restartPointKey = []byte(memTableData.Key)
-			bfSize += 4
-			s = len(restartPointKey)
-		}
-		if s == 0 {
-			for _, b := range restartPointKey {
-				if s >= len(memTableData.Key) || memTableData.Key[s] != b {
-					break
-				}
-				s++
-			}
-		}
-
 		block, err := sst.createDataBlock(mtIterator)
 		if err != nil {
 			return uint32(i), err
@@ -239,8 +217,26 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 			return uint32(i), fmt.Errorf("failed to write block to file: %w", err)
 		}
 
+		// compressed key calculation
+		s := 0
+		memTableData := mtIterator.Data()
+		if len(indexBlock.Entries)%int(sst.brc) == 0 {
+			restartPoints = append(restartPoints, indexBlockOffset)
+			restartPointKey = []byte(memTableData.Key)
+			s = len(restartPointKey)
+		}
+		if s == 0 {
+			for _, b := range restartPointKey {
+				if s >= len(memTableData.Key) || memTableData.Key[s] != b {
+					break
+				}
+				s++
+			}
+		}
+
+		memTableData = mtIterator.Data()
 		indexEntry := &IndexEntry{
-			UnsharedKey:  []byte(memTable[i].Key)[s:],
+			UnsharedKey:  []byte(memTableData.Key)[s:],
 			SharedKeyLen: uint32(s),
 			BlockHandle: &BlockHandle{
 				Offset: uint64(offset),
@@ -248,6 +244,7 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 			},
 		}
 		indexBlock.Entries = append(indexBlock.Entries, indexEntry)
+		indexBlockOffset += uint32(sst.protoEncoder.EncodeSize(indexEntry))
 		offset += uint32(blockSize) + 4 // 4 bytes for checksum
 		i += len(block.Entries)
 	}

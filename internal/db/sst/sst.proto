@@ -1,9 +1,9 @@
 syntax = "proto3";
 
 package sst;
-option go_package = "sst/;sst";
+option go_package = "github.com/MartinSimango/simple-db/internal/db/sst;sst";
 
-import "record.proto";
+import "internal/db/record.proto";
 
 message BlockEntry {
     bytes unshared_key = 1;
