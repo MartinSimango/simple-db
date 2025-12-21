@@ -14,8 +14,8 @@ message BlockEntry {
 }
 
 message BlockHandle {
-    uint64 offset = 1;
-    uint64 size   = 2;
+    fixed32 offset = 1;
+    fixed32 size   = 2;
 }
 
 message IndexEntry {
@@ -39,6 +39,6 @@ message IndexBlock {
 
 message Footer {
     BlockHandle blockHandle = 1;
-    uint32 Version     = 2;
-    uint64 Magic       = 3;
+    fixed32 Version     = 2;
+    fixed64 Magic       = 3;
 }

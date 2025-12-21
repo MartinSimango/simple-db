@@ -1,4 +1,4 @@
-//go:generate protoc --go_out=. sst.proto --go_opt=paths=source_relative  -I=../ -I=.
+//go:generate protoc --go_out=. sst.proto --go_opt=paths=source_relative  -I=../../../ -I=.
 package sst
 
 import (
@@ -134,16 +134,14 @@ func (sst *fileSSTable) createDataBlock(mtIterator memtable.Iterator) (*DataBloc
 			restartPoints = append(restartPoints, offset)
 			restartPointKey = []byte(m.Key)
 			bfSize += 4
-			s = len(restartPointKey)
-		}
-
-		if s == 0 {
+		} else {
 			for _, b := range restartPointKey {
 				if s >= len(m.Key) || m.Key[s] != b {
 					break
 				}
 				s++
 			}
+
 		}
 
 		record := &BlockEntry{
@@ -171,7 +169,7 @@ func (sst *fileSSTable) createDataBlock(mtIterator memtable.Iterator) (*DataBloc
 	return block, nil
 }
 
-func calculateChecksum(data []byte) (uint32, error) {
+func CalculateChecksum(data []byte) (uint32, error) {
 	h := crc32.NewIEEE()
 	if _, err := h.Write(data); err != nil {
 		return 0, err
@@ -204,7 +202,7 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 		}
 
 		// write checksum to buffer
-		checkSum, err := calculateChecksum(sst.blockBuffer.Bytes())
+		checkSum, err := CalculateChecksum(sst.blockBuffer.Bytes())
 		if err != nil {
 			return uint32(i), fmt.Errorf("failed to compute checksum: %w", err)
 		}
@@ -223,9 +221,8 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 		if len(indexBlock.Entries)%int(sst.brc) == 0 {
 			restartPoints = append(restartPoints, indexBlockOffset)
 			restartPointKey = []byte(memTableData.Key)
-			s = len(restartPointKey)
-		}
-		if s == 0 {
+		} else {
+
 			for _, b := range restartPointKey {
 				if s >= len(memTableData.Key) || memTableData.Key[s] != b {
 					break
@@ -234,13 +231,12 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 			}
 		}
 
-		memTableData = mtIterator.Data()
 		indexEntry := &IndexEntry{
 			UnsharedKey:  []byte(memTableData.Key)[s:],
 			SharedKeyLen: uint32(s),
 			BlockHandle: &BlockHandle{
-				Offset: uint64(offset),
-				Size:   uint64(blockSize),
+				Offset: offset,
+				Size:   uint32(blockSize),
 			},
 		}
 		indexBlock.Entries = append(indexBlock.Entries, indexEntry)
@@ -259,7 +255,7 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 	}
 
 	// write checksum to buffer
-	checksum, err := calculateChecksum(sst.blockBuffer.Bytes())
+	checksum, err := CalculateChecksum(sst.blockBuffer.Bytes())
 	if err != nil {
 		return uint32(i + indexBlockSize), fmt.Errorf("failed to compute checksum for index block: %w", err)
 	}
@@ -273,13 +269,13 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 	sst.blockBuffer.Reset()
 	footer := &Footer{
 		BlockHandle: &BlockHandle{
-			Offset: uint64(offset),
-			Size:   uint64(indexBlockSize) + 4, // +4 for checksum
+			Offset: offset,
+			Size:   uint32(indexBlockSize) + 4, // +4 for checksum
 		},
 		Magic:   Magic,
 		Version: version,
 	}
-	// write footer to buffer (28 bytes)
+	// write footer to buffer (26 bytes)
 	if _, err = sst.protoEncoder.Encode(footer); err != nil {
 		return uint32(i + indexBlockSize), fmt.Errorf("failed to write footer to buffer: %w", err)
 	}

@@ -65,7 +65,7 @@ func (e *Encoder) Encode(msg proto.Message) (n int, err error) {
 
 // EncodeSize returns the size in bytes that the encoded message will take
 func (e *Encoder) EncodeSize(msg proto.Message) int {
-	return proto.Size(msg) + int(unsafe.Sizeof(proto.Size(msg)))
+	return proto.Size(msg)
 }
 
 // Decode decodes a proto message from the underlying reader.
