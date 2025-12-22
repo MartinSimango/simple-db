@@ -135,14 +135,12 @@ func TestSSTable_Flush(t *testing.T) {
 	}
 
 	it := memTable.Iterator()
-	i := 0
-	for it.HasNext() {
+	for i := 0; it.HasNext(); it.Next() {
 		mtData := it.Data()
 		if diff := cmp.Diff(mtData, sstData[i]); diff != "" {
 			t.Fatal(diff)
 		}
 		i++
-		it.Next()
 	}
 
 }
