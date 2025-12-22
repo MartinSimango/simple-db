@@ -201,6 +201,7 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 			return uint32(i), err
 		}
 
+		blockSize += 4 // for checksum size
 		// write checksum to buffer
 		checkSum, err := CalculateChecksum(sst.blockBuffer.Bytes())
 		if err != nil {
@@ -241,7 +242,7 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 		}
 		indexBlock.Entries = append(indexBlock.Entries, indexEntry)
 		indexBlockOffset += uint32(sst.protoEncoder.EncodeSize(indexEntry))
-		offset += uint32(blockSize) + 4 // 4 bytes for checksum
+		offset += uint32(blockSize)
 		i += len(block.Entries)
 	}
 

@@ -10,6 +10,7 @@ import (
 	"github.com/MartinSimango/simple-db/internal/db"
 	"github.com/MartinSimango/simple-db/internal/db/memtable"
 	"github.com/MartinSimango/simple-db/internal/db/sst"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -43,7 +44,6 @@ func TestSSTable_Flush(t *testing.T) {
 	ft := &sst.Footer{}
 	proto.Size(ft)
 	size := 26 // fixed size of Footer proto message
-	fmt.Printf("Footer size: %d\n", size)
 	buffer := make([]byte, size)
 	f.Seek(-int64(size), io.SeekEnd)
 	if _, err := f.Read(buffer); err != nil {
@@ -53,7 +53,6 @@ func TestSSTable_Flush(t *testing.T) {
 		t.Fatalf("failed to unmarshal sstable footer: %+v", err)
 	}
 
-	fmt.Printf("Footer %+v\n", ft)
 	indexBlockStart := ft.BlockHandle.Offset
 	indexBlockSize := ft.BlockHandle.Size - 4 // minus checksum size
 	f.Seek(int64(indexBlockStart), io.SeekStart)
@@ -61,16 +60,12 @@ func TestSSTable_Flush(t *testing.T) {
 	if _, err := f.Read(indexBlockBuffer); err != nil {
 		t.Fatalf("failed to read sstable index block: %+v", err)
 	}
-	// var checksumBuffer []byte = make([]byte, 4)
-	// if _, err := f.Read(checksumBuffer); err != nil {
-	// 	t.Fatalf("failed to read sstable index block checksum: %+v", err)
-	// }
+
 	var checksum uint32
 	err = binary.Read(f, binary.LittleEndian, &checksum)
 	if err != nil {
 		t.Fatalf("failed to read sstable index block checksum: %+v", err)
 	}
-	fmt.Printf("Index Block Checksum: %d\n", checksum)
 
 	// confirm checksum
 	calculatedChecksum, err := sst.CalculateChecksum(indexBlockBuffer)
@@ -86,15 +81,68 @@ func TestSSTable_Flush(t *testing.T) {
 		t.Fatalf("failed to unmarshal sstable index block: %+v", err)
 	}
 
+	var sstData []memtable.Data
+
 	for _, entry := range indexBlock.Entries {
-		fmt.Printf("Index Entry: SharedKeyLen=%d, UnsharedKey=%s, BlockHandle={Offset=%d, Size=%d}\n",
-			entry.SharedKeyLen,
-			string(entry.UnsharedKey),
-			entry.BlockHandle.Offset,
-			entry.BlockHandle.Size,
-		)
+
+		blockSize := entry.BlockHandle.Size - 4 // minus checksum size
+		blockOffset := entry.BlockHandle.Offset
+		f.Seek(int64(blockOffset), io.SeekStart)
+		blockBuffer := make([]byte, blockSize)
+		if _, err := f.Read(blockBuffer); err != nil {
+			t.Fatalf("failed to read sstable data block: %+v", err)
+		}
+		var blockChecksum uint32
+		err = binary.Read(f, binary.LittleEndian, &blockChecksum)
+		if err != nil {
+			t.Fatalf("failed to read sstable data block checksum: %+v", err)
+		}
+		calculatedBlockChecksum, err := sst.CalculateChecksum(blockBuffer)
+		if err != nil {
+			t.Fatalf("failed to calculate data block checksum: %+v", err)
+		}
+		if calculatedBlockChecksum != blockChecksum {
+			t.Fatalf("data block checksum mismatch: expected %d, got %d", blockChecksum, calculatedBlockChecksum)
+		}
+		block := &sst.DataBlock{}
+		if err := proto.Unmarshal(blockBuffer, block); err != nil {
+			t.Fatalf("failed to unmarshal sstable data block: %+v", err)
+		}
+		blockEntryOffset := uint32(0)
+		ri := 0
+		var rKey string
+		for _, be := range block.Entries {
+
+			if ri < int(block.RestartCount) && blockEntryOffset == block.RestartPoints[ri] {
+				rKey = string(be.UnsharedKey)
+				ri++
+			}
+
+			key := rKey[:be.SharedKeyLen] + string(be.UnsharedKey)
+			value := string(be.Value)
+			typ := be.RecordType
+
+			sstData = append(sstData, memtable.Data{
+				Key: key,
+				Value: memtable.Value{
+					Value:      value,
+					RecordType: typ,
+				},
+			})
+			blockEntryOffset += uint32(proto.Size(be))
+		}
 
 	}
-	fmt.Printf("Index Block %+v\n", indexBlock)
+
+	it := memTable.Iterator()
+	i := 0
+	for it.HasNext() {
+		mtData := it.Data()
+		if diff := cmp.Diff(mtData, sstData[i]); diff != "" {
+			t.Fatal(diff)
+		}
+		i++
+		it.Next()
+	}
 
 }
