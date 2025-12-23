@@ -41,38 +41,38 @@ func TestSSTable_Flush(t *testing.T) {
 	}
 	defer f.Close()
 
-	it := sst.NewIterator(f)
-
-	var sstData []memtable.Data
-
-	for it.Next() {
-		entry := it.Entry()
-		key := string(it.Key())
-		value := string(entry.Value)
-		typ := entry.RecordType
-		sstData = append(sstData, memtable.Data{
-			Key: key,
-			Value: memtable.Value{
-				Value:      value,
-				RecordType: typ,
-			},
-		})
-	}
-	if !errors.Is(io.EOF, it.Error()) {
-		t.Fatalf("sst iterator error: %+v", it.Error())
-	}
-	if len(sstData) != memTableSize {
-		t.Fatalf("sstable data size %d does not match memtable size %d", len(sstData), memTable.Size())
-	}
+	sstIt := sst.NewIterator(f)
 
 	memIt := memTable.Iterator()
 
-	for i := 0; memIt.HasNext(); memIt.Next() {
+	for {
+		ssItOk := sstIt.Next()
+		memItOk := memIt.Next()
+
+		if !ssItOk || !memItOk {
+			break
+		}
+		entry := sstIt.Entry()
 		mtData := memIt.Data()
-		if diff := cmp.Diff(mtData, sstData[i]); diff != "" {
+
+		sstData := memtable.Data{
+			Key: string(sstIt.Key()),
+			Value: memtable.Value{
+				Value:      string(entry.Value),
+				RecordType: entry.RecordType,
+			},
+		}
+		if diff := cmp.Diff(mtData, sstData); diff != "" {
 			t.Fatal(diff)
 		}
-		i++
+
+	}
+	// both iterators should have reached EOF indicating that they are the same length
+	if !errors.Is(io.EOF, sstIt.Error()) {
+		t.Fatalf("sst iterator error: %+v", sstIt.Error())
+	}
+	if !errors.Is(io.EOF, memIt.Error()) {
+		t.Fatalf("memtable iterator error: %+v", memIt.Error())
 	}
 
 }

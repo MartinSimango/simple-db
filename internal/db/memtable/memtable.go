@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -16,23 +17,23 @@ type Recoverable interface {
 }
 
 type Iterator interface {
-	// HasNext returns true if there are more items to iterate over. Returns false otherwise.
-	HasNext() bool
-
 	// Next advances the iterator to the next item and returns true if there is a next item. Returns false if there are no more items.
 	Next() bool
 
 	// Data returns the current item without advancing the iterator.
 	Data() Data
+
+	// Error returns the error encountered during iteration, if any. io.EOF is returned when the iteration is complete.
+	Error() error
 }
 
 type MapIterator struct {
 	data  map[string]Value
 	keys  []string
 	index int
+	err   error
 }
 
-// TODO: make iterator start at -1 and have Next() advance to first element
 func newMapIterator(data map[string]Value) *MapIterator {
 	keys := make([]string, 0, len(data))
 	for k := range data {
@@ -42,7 +43,7 @@ func newMapIterator(data map[string]Value) *MapIterator {
 	return &MapIterator{
 		data:  data,
 		keys:  keys,
-		index: 0,
+		index: -1,
 	}
 }
 
@@ -59,18 +60,17 @@ func (it *MapIterator) Data() Data {
 }
 
 func (it *MapIterator) Next() bool {
-	hn := it.HasNext()
-	if hn {
-		it.index++
-	}
-	return hn
-}
-
-func (it *MapIterator) HasNext() bool {
 	if it.index >= len(it.keys) {
+		it.err = io.EOF
 		return false
 	}
+	it.index++
 	return true
+
+}
+
+func (it *MapIterator) Error() error {
+	return it.err
 }
 
 type Table interface {

@@ -43,6 +43,7 @@ func Open(path string) (*Reader, error) {
 }
 
 func (r *Reader) readFooter() (*Footer, error) {
+	// set up dummy values to get footer size
 	var ft *Footer = &Footer{
 		Magic:   1,
 		Version: 1,
@@ -52,7 +53,6 @@ func (r *Reader) readFooter() (*Footer, error) {
 		},
 	}
 	size := proto.Size(ft)
-	fmt.Println("footer size:", size)
 	buffer := make([]byte, size)
 	r.Seek(-int64(size), io.SeekEnd)
 	if _, err := r.Read(buffer); err != nil {

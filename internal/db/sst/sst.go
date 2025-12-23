@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"os"
 
 	"github.com/MartinSimango/simple-db/internal/db/encoding/proto"
@@ -81,7 +82,7 @@ var _ SSTable = (*fileSSTable)(nil)
 
 // CreateSSTable creates a new SSTable file with the given filename.
 func Create(filename string) (SSTable, error) {
-	f, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0644)
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -109,12 +110,11 @@ func (sst *fileSSTable) createDataBlock(mtIterator memtable.Iterator) (*DataBloc
 	var restartPoints []uint32
 	block := &DataBlock{}
 	offset := uint32(0)
-	i := 0
-	for mtIterator.HasNext() {
+	for mtIterator.Error() == nil {
 		m := mtIterator.Data()
 		// shared key length
 		s := 0
-		if i%int(sst.brc) == 0 {
+		if len(block.Entries)%int(sst.brc) == 0 {
 			restartPoints = append(restartPoints, offset)
 			bfSize += 4
 		} else {
@@ -145,7 +145,6 @@ func (sst *fileSSTable) createDataBlock(mtIterator memtable.Iterator) (*DataBloc
 		block.Entries = append(block.Entries, record)
 		offset += recordSize
 		mtIterator.Next()
-		i++
 	}
 
 	block.RestartCount = uint32(len(restartPoints))
@@ -170,7 +169,8 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 	var restartPointKey []byte
 	var restartPoints []uint32
 
-	for mtIterator.HasNext() {
+	mtIterator.Next() // prime the iterator
+	for mtIterator.Error() == nil {
 		// reset block buffer
 		sst.blockBuffer.Reset()
 		block, err := sst.createDataBlock(mtIterator)
@@ -228,6 +228,9 @@ func (sst *fileSSTable) Flush(mtIterator memtable.Iterator) (uint32, error) {
 		indexBlockOffset += uint32(sst.protoEncoder.EncodeSize(indexEntry))
 		offset += uint32(blockSize)
 		i += len(block.Entries)
+	}
+	if !errors.Is(mtIterator.Error(), io.EOF) {
+		return uint32(i), fmt.Errorf("failed to flush memtable to sstable: %w", mtIterator.Error())
 	}
 
 	sst.blockBuffer.Reset()
