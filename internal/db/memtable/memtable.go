@@ -32,6 +32,7 @@ type MapIterator struct {
 	index int
 }
 
+// TODO: make iterator start at -1 and have Next() advance to first element
 func newMapIterator(data map[string]Value) *MapIterator {
 	keys := make([]string, 0, len(data))
 	for k := range data {
