@@ -13,7 +13,7 @@ import (
 )
 
 type Writer struct {
-	wc  io.WriteCloser
+	w   io.Writer
 	bw  *bufio.Writer
 	brc uint32 // block restart count
 }
@@ -26,10 +26,10 @@ func NewFileWriter(path string) (*Writer, error) {
 	return NewWriter(f)
 }
 
-func NewWriter(wc io.WriteCloser) (*Writer, error) {
+func NewWriter(w io.Writer) (*Writer, error) {
 	return &Writer{
-		wc:  wc,
-		bw:  bufio.NewWriter(wc),
+		w:   w,
+		bw:  bufio.NewWriter(w),
 		brc: 8,
 	}, nil
 }
@@ -193,5 +193,9 @@ func (w *Writer) sharedPrefixLength(prevKey, key []byte) int {
 }
 
 func (w *Writer) Close() error {
-	return w.wc.Close()
+	if c, ok := w.w.(io.Closer); ok {
+		return c.Close()
+	}
+
+	return nil
 }

@@ -15,6 +15,6 @@ enum RecordType {
 message Record {
     RecordType record_type = 1;
     string key = 2;
-    string value = 3; // empty for deletes
-    // TODO: add a sequence number field to unique identify records if needed
+    string value = 3; 
+    uint64 seq = 4; // sequence number
 }

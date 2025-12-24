@@ -13,10 +13,18 @@ import (
 )
 
 // TODO: need to mock memtable iterator and test various scenarios
+// TODO: Test the encoding of a single block
+
+// Test the decoding of a single block
+
+// Test varint encoding/decoding in isolation
+
+// Test restart point generation in isolation
+
+// Test index entry encoding in isolation
 func TestWriter_Write(t *testing.T) {
 
 	// f, err := os.CreateTemp(t.TempDir(), "sstable.sdb")
-
 	s, err := sst.NewFileWriter("sstable.sdb")
 	if err != nil {
 		t.Fatal("failed to create sstable:", err)
@@ -34,7 +42,7 @@ func TestWriter_Write(t *testing.T) {
 	}
 
 	// now read back and verify
-	// 1.
+
 	r, err := sst.NewFileReader("sstable.sdb")
 	if err != nil {
 		t.Fatalf("failed to open sstable file: %+v", err)

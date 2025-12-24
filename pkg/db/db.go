@@ -443,14 +443,14 @@ func (sdb *SimpleDb) flushSnapshots() {
 	slog.Info("Memtable full, flushing to SSTable and truncating WAL")
 
 	// Iterate through snapshot and write to sstable
-	ssTable, err := sst.Create("sstable.db") // TODO: NEXT generate unique sstable file name
+	ssTable, err := sst.NewFileWriter("sstable.sdb")
 	if err != nil {
 		slog.Error("Failed to create SSTable for flushing memtable snapshot", "error", err)
 		return
 	}
 	defer ssTable.Close()
 
-	_, err = ssTable.Flush(sdb.memTableSnapshot.Iterator())
+	_, err = ssTable.Write(sdb.memTableSnapshot.Iterator())
 	if err != nil {
 		slog.Error("Failed to flush memtable snapshot to SSTable", "error", err)
 		return
