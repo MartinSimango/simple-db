@@ -13,11 +13,11 @@ import (
 )
 
 // TODO: need to mock memtable iterator and test various scenarios
-func TestSSTable_Flush(t *testing.T) {
+func TestWriter_Write(t *testing.T) {
 
 	// f, err := os.CreateTemp(t.TempDir(), "sstable.sdb")
 
-	s, err := sst.Create("sstable.sdb")
+	s, err := sst.NewFileWriter("sstable.sdb")
 	if err != nil {
 		t.Fatal("failed to create sstable:", err)
 	}
@@ -29,19 +29,18 @@ func TestSSTable_Flush(t *testing.T) {
 		memTable.Put(db.RecordType_PUT, fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
 
 	}
-	if _, err := s.Flush(memTable.Iterator()); err != nil {
+	if _, err := s.Write(memTable.Iterator()); err != nil {
 		t.Fatalf("failed to flush memtable to sstable: %+v", err)
 	}
 
 	// now read back and verify
 	// 1.
-	f, err := sst.Open("sstable.sdb")
+	r, err := sst.NewFileReader("sstable.sdb")
 	if err != nil {
 		t.Fatalf("failed to open sstable file: %+v", err)
 	}
-	defer f.Close()
 
-	sstIt := sst.NewIterator(f)
+	sstIt := sst.NewIterator(r)
 
 	memIt := memTable.Iterator()
 

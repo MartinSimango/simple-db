@@ -14,14 +14,18 @@ type Reader struct {
 	indexBlock *IndexBlock
 }
 
-func Open(path string) (*Reader, error) {
+func NewFileReader(path string) (*Reader, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open sstable file: %w", err)
 	}
+	return NewReader(f)
+}
+
+func NewReader(rsc io.ReadSeekCloser) (*Reader, error) {
 
 	r := &Reader{
-		ReadSeekCloser: f,
+		ReadSeekCloser: rsc,
 	}
 
 	footer, err := r.readFooter()

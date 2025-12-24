@@ -27,13 +27,11 @@ message IndexEntry {
 message DataBlock {
     repeated BlockEntry entries = 1;
     repeated uint32 restart_points = 2;
-    uint32 restart_count = 3;
 }
 
 message IndexBlock {
     repeated IndexEntry entries = 1;
     repeated uint32 restart_points = 2;
-    uint32 restart_count = 3;
 }
 
 

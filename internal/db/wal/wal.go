@@ -45,7 +45,7 @@ func NewFile(simpleDbDir, walFileName string) (*File, error) {
 func (f *File) WriteRecord(record *db.Record) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	_, err := f.protoEncoder.Encode(record)
+	_, err := f.protoEncoder.EncodeWithSizePrefix(record)
 	return err
 
 }
@@ -61,7 +61,7 @@ func (f *File) ReadRecords() ([]*db.Record, error) {
 	for {
 		var record db.Record
 
-		err := f.protoDecoder.Decode(&record)
+		err := f.protoDecoder.DecodeWithSizePrefix(&record)
 		if err == io.EOF {
 			break
 		}
