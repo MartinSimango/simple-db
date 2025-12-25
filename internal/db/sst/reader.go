@@ -11,7 +11,8 @@ import (
 
 type Reader struct {
 	io.ReadSeekCloser
-	indexBlock *IndexBlock
+	indexBlock       *IndexBlock
+	indexBlockOffset uint32
 }
 
 func NewFileReader(path string) (*Reader, error) {
@@ -32,6 +33,8 @@ func NewReader(rsc io.ReadSeekCloser) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	r.indexBlockOffset = footer.BlockHandle.Offset
 
 	indexBlockData, err := r.loadBlock(footer.BlockHandle)
 	if err != nil {
@@ -111,6 +114,21 @@ func (r *Reader) readDataBlock(i int) (*DataBlock, error) {
 		return nil, fmt.Errorf("failed to unmarshal sstable data block: %w", err)
 	}
 	return block, nil
+}
+
+func (r *Reader) Get(key []byte) (*BlockEntry, error) {
+	// 1. Find the index block
+	// s := 0
+	// e := len(r.indexBlock.RestartPoints) - 1
+	// for s <= e {
+	// 	m := (s + e) / 2
+	// 	offset := r.indexBlock.RestartPoints[m]
+	// 	// read the index entry at offset
+	// 	r.Seek(int64(r.indexBlockOffset+offset), io.SeekStart)
+
+	// }
+
+	// return nil, nil
 }
 
 func (r *Reader) Close() error {
