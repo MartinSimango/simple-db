@@ -1,6 +1,7 @@
 package sst
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -11,8 +12,9 @@ import (
 
 type Reader struct {
 	io.ReadSeekCloser
-	indexBlock       *IndexBlock
-	indexBlockOffset uint32
+	idxBlock       *IndexBlock
+	idxBlockBytes  []byte
+	idxBlockReader *bytes.Reader
 }
 
 func NewFileReader(path string) (*Reader, error) {
@@ -34,16 +36,41 @@ func NewReader(rsc io.ReadSeekCloser) (*Reader, error) {
 		return nil, err
 	}
 
-	r.indexBlockOffset = footer.BlockHandle.Offset
-
-	indexBlockData, err := r.loadBlock(footer.BlockHandle)
+	r.idxBlockBytes, err = r.loadBlock(footer.BlockHandle)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read index block: %w", err)
 	}
-	r.indexBlock = &IndexBlock{}
-	if err := proto.Unmarshal(indexBlockData, r.indexBlock); err != nil {
+	r.idxBlock = &IndexBlock{}
+	if err := proto.Unmarshal(r.idxBlockBytes, r.idxBlock); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal sstable index block: %w", err)
 	}
+	r.idxBlockReader = bytes.NewReader(r.idxBlockBytes)
+
+	// Protobuf encodes data like this for the IndexBlock field
+	// message IndexBlock {
+	//   repeated IndexEntry entries = 1;
+	//   repeated uint32 restart_points = 2;
+	// }
+	// The index entries field is stored like:
+	// [field tag + wire type] (uvarint)
+	// The repeated entries are stored as length-delimited fields:
+	// [length of entry] [serialized IndexEntry bytes] [length of entry] [serialized IndexEntry bytes] ...
+	// the offset in the restart points does not
+
+	// bR := bytes.NewReader(indexBlockBytes)
+	// _, err = binary.ReadUvarint(bR)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to read index block entry type: %w", err)
+	// }
+
+	// a, err := binary.ReadUvarint(bR)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to read index block entry size: %w", err)
+	// }
+	// fmt.Println("Index block entry size:", a)
+
+	// // s := bR.Size() - int64(bR.Len())
+	// r.indexBlockEntryBytes = indexBlockBytes[1:]
 
 	return r, nil
 
@@ -101,10 +128,10 @@ func (r *Reader) loadBlock(bh *BlockHandle) ([]byte, error) {
 }
 
 func (r *Reader) readDataBlock(i int) (*DataBlock, error) {
-	if i >= len(r.indexBlock.Entries) {
+	if i >= len(r.idxBlock.Entries) {
 		return nil, io.EOF
 	}
-	bh := r.indexBlock.Entries[i].BlockHandle
+	bh := r.idxBlock.Entries[i].BlockHandle
 	blockData, err := r.loadBlock(bh)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load data block: %w", err)
@@ -117,20 +144,69 @@ func (r *Reader) readDataBlock(i int) (*DataBlock, error) {
 }
 
 func (r *Reader) Get(key []byte) (*BlockEntry, error) {
-	// 1. Find the index block
-	// s := 0
-	// e := len(r.indexBlock.RestartPoints) - 1
-	// for s <= e {
-	// 	m := (s + e) / 2
-	// 	offset := r.indexBlock.RestartPoints[m]
-	// 	// read the index entry at offset
-	// 	r.Seek(int64(r.indexBlockOffset+offset), io.SeekStart)
+	s := 0
+	e := len(r.idxBlock.RestartPoints)
+	var m int
+	found := false
+	for s < e && !found {
+		m = (s + e) / 2
+		offset := r.idxBlock.RestartPoints[m]
+		entry, err := r.readIndexEntryAtOffset(offset)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read index entry at offset %d: %w", offset, err)
+		}
 
-	// }
+		cmp := bytes.Compare([]byte(entry.UnsharedKey), key)
+		if cmp == 0 {
+			found = true
+		} else if cmp < 0 {
+			s = m + 1
+		} else {
+			e = m - 1
+		}
 
-	// return nil, nil
+		fmt.Printf("Key bytes: %+v, m: %d\n", entry, m)
+
+	}
+	if !found {
+		// TODO: do a linear search starting from index block at m until key is found or next index block key is greater than search key
+		fmt.Println("Block for Key not found looking for block ")
+	} else {
+		fmt.Println("Key block found")
+		// get the data block
+
+	}
+
+	return nil, nil
 }
 
+func (r *Reader) readIndexEntryAtOffset(offset uint32) (*IndexEntry, error) {
+	r.idxBlockReader.Seek(int64(offset), io.SeekStart)
+	// read field tag and wire type
+	_, err := binary.ReadUvarint(r.idxBlockReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read index field tag data: %w", err)
+	}
+
+	// read entry size
+	entrySize, err := binary.ReadUvarint(r.idxBlockReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read index entry size data: %w", err)
+	}
+	// TODO: use a buffer instead of creating a new byte slice every time
+	entryBytes := make([]byte, entrySize)
+	entry := &IndexEntry{}
+
+	if _, err := r.idxBlockReader.Read(entryBytes); err != nil {
+		return nil, fmt.Errorf("failed to read index entry key: %w", err)
+	}
+
+	err = proto.Unmarshal(entryBytes, entry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal index entry: %w", err)
+	}
+	return entry, nil
+}
 func (r *Reader) Close() error {
 	return r.ReadSeekCloser.Close()
 }

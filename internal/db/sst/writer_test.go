@@ -82,4 +82,6 @@ func TestWriter_Write(t *testing.T) {
 		t.Fatalf("memtable iterator error: %+v", memIt.Error())
 	}
 
+	r.Get([]byte("key1"))
+
 }

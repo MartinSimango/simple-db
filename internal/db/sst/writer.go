@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/MartinSimango/simple-db/internal/db/memtable"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -30,7 +31,7 @@ func NewWriter(w io.Writer) (*Writer, error) {
 	return &Writer{
 		w:   w,
 		bw:  bufio.NewWriter(w),
-		brc: 8,
+		brc: 2,
 	}, nil
 }
 
@@ -80,6 +81,7 @@ func (w *Writer) Write(it memtable.Iterator) (uint32, error) {
 		memTableData := it.Data()
 		if len(indexBlock.Entries)%int(w.brc) == 0 {
 			indexBlock.RestartPoints = append(indexBlock.RestartPoints, indexBlockOffset)
+
 		} else {
 			s = w.sharedPrefixLength(prevKey, []byte(memTableData.Key))
 		}
@@ -94,7 +96,9 @@ func (w *Writer) Write(it memtable.Iterator) (uint32, error) {
 			},
 		}
 		indexBlock.Entries = append(indexBlock.Entries, indexEntry)
-		indexBlockOffset += uint32(proto.Size(indexEntry))
+		entrySize := uint32(proto.Size(indexEntry))
+		// each entry consists of the size varint + field tag + entry bytes
+		indexBlockOffset += entrySize + 1 + uint32(protowire.SizeVarint(uint64(entrySize))) // +1 for the field tag
 		offset += uint32(blockSize)
 		i += len(block.Entries)
 	}
@@ -174,7 +178,17 @@ func (w *Writer) createDataBlock(it memtable.Iterator) (*DataBlock, error) {
 		}
 		// encoder is setup to write to block buffer
 		block.Entries = append(block.Entries, record)
-		offset += recordSize
+		// we can't just add the record size as the DataBlock will be encoded with protobuf which adds extra bytes for field tags and size varints
+		// Datablock looks like this:
+		// message DataBlock {
+		//   repeated BlockEntry entries = 1;
+		//   repeated uint32 restart_points = 2;
+		// }
+		// Each entry is stored as:
+		// [field tag + wire type] (uvarint)
+		// [length of entry] [serialized BlockEntry bytes] [length of entry] [serialized BlockEntry bytes] ...
+		// so we need to account for the field tag and size varint for each entry
+		offset += recordSize + uint32(protowire.SizeVarint(uint64(recordSize))) + 1 // +1 for the field tag
 		it.Next()
 	}
 
