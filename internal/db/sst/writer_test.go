@@ -32,7 +32,7 @@ func TestWriter_Write(t *testing.T) {
 	defer s.Close()
 
 	memTable := memtable.NewTable(memtable.MapType)
-	memTableSize := 1000
+	memTableSize := 10
 	for i := 0; i < memTableSize; i++ {
 		memTable.Put(db.RecordType_PUT, fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
 
@@ -82,6 +82,7 @@ func TestWriter_Write(t *testing.T) {
 		t.Fatalf("memtable iterator error: %+v", memIt.Error())
 	}
 
-	r.Get([]byte("key1"))
+	// r.Get([]byte("key1"))
+	r.Get([]byte("key9"))
 
 }

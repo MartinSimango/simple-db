@@ -148,15 +148,17 @@ func (r *Reader) Get(key []byte) (*BlockEntry, error) {
 	e := len(r.idxBlock.RestartPoints)
 	var m int
 	found := false
+	var indexEntry *IndexEntry
 	for s < e && !found {
 		m = (s + e) / 2
 		offset := r.idxBlock.RestartPoints[m]
-		entry, err := r.readIndexEntryAtOffset(offset)
+		var err error
+		indexEntry, err = r.readIndexEntryAtOffset(offset)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read index entry at offset %d: %w", offset, err)
 		}
 
-		cmp := bytes.Compare([]byte(entry.UnsharedKey), key)
+		cmp := bytes.Compare([]byte(indexEntry.UnsharedKey), key)
 		if cmp == 0 {
 			found = true
 		} else if cmp < 0 {
@@ -165,14 +167,30 @@ func (r *Reader) Get(key []byte) (*BlockEntry, error) {
 			e = m - 1
 		}
 
-		fmt.Printf("Key bytes: %+v, m: %d\n", entry, m)
+		fmt.Printf("Key bytes: %+v, m: %d\n", indexEntry, m)
 
 	}
 	if !found {
 		// TODO: do a linear search starting from index block at m until key is found or next index block key is greater than search key
 		fmt.Println("Block for Key not found looking for block ")
 	} else {
-		fmt.Println("Key block found")
+		// TODO: we need to implement caching of data blocks to avoid reading from disk every time
+		fmt.Println("Key block found", indexEntry)
+		blockOffset := indexEntry.BlockHandle.Offset
+		blockSize := indexEntry.BlockHandle.Size
+		r.Seek(int64(blockOffset), io.SeekStart)
+		blockBuffer := make([]byte, blockSize-4) // -4 for checksum
+		if _, err := r.Read(blockBuffer); err != nil {
+			return nil, fmt.Errorf("failed to read sstable block: %w", err)
+		}
+		block := &DataBlock{}
+		if err := proto.Unmarshal(blockBuffer, block); err != nil {
+			fmt.Println("Failed to read block bytes")
+
+			return nil, fmt.Errorf("failed to unmarshal sstable data block: %w", err)
+		}
+		fmt.Println("Value:", string(block.Entries[len(block.Entries)-1].Value))
+
 		// get the data block
 
 	}

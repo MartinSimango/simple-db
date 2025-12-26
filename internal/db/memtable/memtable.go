@@ -60,11 +60,12 @@ func (it *MapIterator) Data() Data {
 }
 
 func (it *MapIterator) Next() bool {
+	it.index++
 	if it.index >= len(it.keys) {
 		it.err = io.EOF
 		return false
 	}
-	it.index++
+
 	return true
 
 }
