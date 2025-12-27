@@ -105,7 +105,9 @@ func (r *Reader) loadBlock(bh *BlockHandle) ([]byte, error) {
 
 	blockOffset := bh.Offset
 	blockSize := bh.Size - 4 // minus checksum size
-	r.Seek(int64(blockOffset), io.SeekStart)
+	if _, err := r.Seek(int64(blockOffset), io.SeekStart); err != nil {
+		return nil, fmt.Errorf("failed to seek to data block offset %d: %w", blockOffset, err)
+	}
 	blockBuffer := make([]byte, blockSize)
 	if _, err := r.Read(blockBuffer); err != nil {
 		return nil, fmt.Errorf("failed to read sstable block: %w", err)
@@ -125,6 +127,19 @@ func (r *Reader) loadBlock(bh *BlockHandle) ([]byte, error) {
 	}
 
 	return blockBuffer, nil
+}
+
+func (r *Reader) loadDataBlock(bh *BlockHandle) (*DataBlock, error) {
+	// TODO: implement caching of data blocks
+	blockData, err := r.loadBlock(bh)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load data block: %w", err)
+	}
+	block := &DataBlock{}
+	if err := proto.Unmarshal(blockData, block); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal sstable data block: %w", err)
+	}
+	return block, nil
 }
 
 func (r *Reader) readDataBlock(i int) (*DataBlock, error) {
@@ -206,22 +221,9 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 
 		// }
 		fmt.Println("Potential Key block found", indexEntry)
-		blockOffset := indexEntry.BlockHandle.Offset
-		blockSize := indexEntry.BlockHandle.Size
-		if _, err := r.Seek(int64(blockOffset), io.SeekStart); err != nil {
-			fmt.Println("Failed to seek to block offset", blockOffset, err)
-			return nil, fmt.Errorf("failed to seek to data block offset %d: %w", blockOffset, err)
-		}
-		blockBuffer := make([]byte, blockSize-4) // -4 for checksum
-		if _, err := r.Read(blockBuffer); err != nil {
-			fmt.Println("Failed to read block buffer", err)
-			return nil, fmt.Errorf("failed to read sstable block: %w", err)
-		}
-		block := &DataBlock{}
-		if err := proto.Unmarshal(blockBuffer, block); err != nil {
-			fmt.Println("Failed to read block bytes")
-
-			return nil, fmt.Errorf("failed to unmarshal sstable data block: %w", err)
+		block, err := r.loadDataBlock(indexEntry.BlockHandle)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load data block: %w", err)
 		}
 		prevKey := ""
 		// TODO: use restart points to optimize search within data block
@@ -241,28 +243,16 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 	} else {
 		// TODO: we need to implement caching of data blocks to avoid reading from disk every time
 		fmt.Println("Key block found", indexEntry)
-		blockOffset := indexEntry.BlockHandle.Offset
-		blockSize := indexEntry.BlockHandle.Size
-		if _, err := r.Seek(int64(blockOffset), io.SeekStart); err != nil {
-			return nil, fmt.Errorf("failed to seek to data block offset %d: %w", blockOffset, err)
+		block, err := r.loadDataBlock(indexEntry.BlockHandle)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load data block: %w", err)
 		}
-		blockBuffer := make([]byte, blockSize-4) // -4 for checksum
-		if _, err := r.Read(blockBuffer); err != nil {
-			return nil, fmt.Errorf("failed to read sstable block: %w", err)
-		}
-		block := &DataBlock{}
-		if err := proto.Unmarshal(blockBuffer, block); err != nil {
-			fmt.Println("Failed to read block bytes")
-
-			return nil, fmt.Errorf("failed to unmarshal sstable data block: %w", err)
-		}
-		// fmt.Println("Value:", string(block.Entries[len(block.Entries)-1].Value))
+		fmt.Println("Value:", string(block.Entries[len(block.Entries)-1].Value))
 		return block.Entries[len(block.Entries)-1].Value, nil
 		// get the data block
 
 	}
 
-	return nil, nil
 }
 
 // readIndexEntryAtOffset reads an index entry from the index block at the given offset. It returns the index entry, the number of bytes read, and an error if any.
