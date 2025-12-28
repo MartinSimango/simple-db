@@ -31,7 +31,7 @@ func NewWriter(w io.Writer) (*Writer, error) {
 	return &Writer{
 		w:   w,
 		bw:  bufio.NewWriter(w),
-		brc: 2,
+		brc: 1,
 	}, nil
 }
 
@@ -62,7 +62,8 @@ func (w *Writer) Write(it memtable.Iterator) (uint32, error) {
 
 	it.Next() // prime the iterator
 	for it.Error() == nil {
-		block, lastData, err := w.createDataBlock(it)
+		startKey := it.Data().Key
+		block, err := w.createDataBlock(it)
 		if err != nil {
 			return uint32(i), err
 		}
@@ -82,12 +83,12 @@ func (w *Writer) Write(it memtable.Iterator) (uint32, error) {
 			indexBlock.RestartPoints = append(indexBlock.RestartPoints, indexBlockOffset)
 
 		} else {
-			s = w.sharedPrefixLength(prevKey, []byte(lastData.Key))
+			s = w.sharedPrefixLength(prevKey, []byte(startKey))
 		}
-		prevKey = []byte(lastData.Key)
+		prevKey = []byte(startKey)
 
 		indexEntry := &IndexEntry{
-			UnsharedKey:  []byte(lastData.Key)[s:],
+			UnsharedKey:  []byte(startKey)[s:],
 			SharedKeyLen: uint32(s),
 			BlockHandle: &BlockHandle{
 				Offset: offset,
@@ -146,10 +147,9 @@ func (w *Writer) Write(it memtable.Iterator) (uint32, error) {
 }
 
 // createDataBlock creates a data block from the given memtable data starting at the given offset.
-// It returns the created DataBlock, the last memtable data added to the block, and any error encountered.
-func (w *Writer) createDataBlock(it memtable.Iterator) (*DataBlock, memtable.Data, error) {
+// It returns the created DataBlock and any error encountered.
+func (w *Writer) createDataBlock(it memtable.Iterator) (*DataBlock, error) {
 	var prevKey []byte
-	var lastData memtable.Data
 	block := &DataBlock{}
 	bfSize := uint32(0) // initial size for restart point count
 	offset := uint32(0)
@@ -175,11 +175,10 @@ func (w *Writer) createDataBlock(it memtable.Iterator) (*DataBlock, memtable.Dat
 		if offset+recordSize+bfSize > BlockSize {
 			// record would exceed block size
 			// TODO: allow for overflows blocks later as these limits the size of values we can store
-			return block, lastData, nil
+			return block, nil
 		}
 		// encoder is setup to write to block buffer
 		block.Entries = append(block.Entries, record)
-		lastData = m
 		// we can't just add the record size as the DataBlock will be encoded with protobuf which adds extra bytes for field tags and size varints
 		// Datablock looks like this:
 		// message DataBlock {
@@ -194,7 +193,7 @@ func (w *Writer) createDataBlock(it memtable.Iterator) (*DataBlock, memtable.Dat
 		it.Next()
 	}
 
-	return block, lastData, nil
+	return block, nil
 }
 
 func (w *Writer) sharedPrefixLength(prevKey, key []byte) int {

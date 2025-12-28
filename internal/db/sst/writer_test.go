@@ -83,6 +83,6 @@ func TestWriter_Write(t *testing.T) {
 	}
 
 	// r.Get([]byte("key1"))
-	r.Get([]byte("key2"))
+	fmt.Println(r.Get([]byte("key7")))
 
 }
