@@ -18,6 +18,12 @@ message BlockHandle {
     fixed32 size   = 2;
 }
 
+
+message EntryKey {
+    bytes unshared_key  = 1;       
+    uint32 shared_key_len = 2;
+}
+
 message IndexEntry {
     bytes unshared_key  = 1;       
     uint32 shared_key_len = 2;      

@@ -44,6 +44,7 @@ func NewReader(rsc io.ReadSeekCloser) (*Reader, error) {
 	if err := proto.Unmarshal(r.idxBlockBytes, r.idxBlock); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal sstable index block: %w", err)
 	}
+
 	r.idxBlockReader = bytes.NewReader(r.idxBlockBytes)
 
 	// Protobuf encodes data like this for the IndexBlock field
@@ -56,21 +57,6 @@ func NewReader(rsc io.ReadSeekCloser) (*Reader, error) {
 	// The repeated entries are stored as length-delimited fields:
 	// [length of entry] [serialized IndexEntry bytes] [length of entry] [serialized IndexEntry bytes] ...
 	// the offset in the restart points does not
-
-	// bR := bytes.NewReader(indexBlockBytes)
-	// _, err = binary.ReadUvarint(bR)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to read index block entry type: %w", err)
-	// }
-
-	// a, err := binary.ReadUvarint(bR)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to read index block entry size: %w", err)
-	// }
-	// fmt.Println("Index block entry size:", a)
-
-	// // s := bR.Size() - int64(bR.Len())
-	// r.indexBlockEntryBytes = indexBlockBytes[1:]
 
 	return r, nil
 
@@ -165,18 +151,30 @@ const (
 	Data
 )
 
-type blockBinSearchResult struct {
-	Block           blockEntry
+type entryLookupResult struct {
+	Entry           Entry
 	NextEntryOffset uint32
 	Found           bool
 }
 
-// floor binary search variant to find the data block that may contain the given key
-func (r *Reader) binSearchBlock(blockType BlockType, blockBytes []byte, key []byte, restartPoints []uint32) (*blockBinSearchResult, error) {
+// findFloorRestartPoint performs a binary search over the restart points
+// of a block to locate the floor entry for the given key. A floor entry is
+// the last entry whose key is less than or equal to the target key.
+//
+// The function does not decode the entire block. Instead, it uses the
+// restart point offsets to jump directly to candidate entries, reconstructs
+// their keys, and compares them to the target. If an exact match is found,
+// it returns that entry with Found = true. Otherwise, it returns the
+// greatest entry whose key is < target, with Found = false.
+//
+// This is used for both index blocks (to determine which data block may
+// contain the key) and data blocks (to find the starting position for a
+// forward scan). The returned searchResult includes the located entry and
+// the offset of the next entry for continued iteration.
+func (r *Reader) findFloorRestartPoint(blockType BlockType, blockBytes []byte, key []byte, restartPoints []uint32) (*entryLookupResult, error) {
 	low := 0
 	high := len(restartPoints) - 1
 
-	fmt.Println("Starting binary search for key:", string(key))
 	for low <= high {
 		m := low + (high-low)/2
 
@@ -188,8 +186,8 @@ func (r *Reader) binSearchBlock(blockType BlockType, blockBytes []byte, key []by
 
 		cmp := bytes.Compare(block.GetUnsharedKey(), key)
 		if cmp == 0 {
-			return &blockBinSearchResult{
-				Block:           block,
+			return &entryLookupResult{
+				Entry:           block,
 				NextEntryOffset: nextOffset,
 				Found:           true,
 			}, nil
@@ -208,20 +206,24 @@ func (r *Reader) binSearchBlock(blockType BlockType, blockBytes []byte, key []by
 		return nil, fmt.Errorf("failed to read index entry at offset %d: %s: %d", r.idxBlock.RestartPoints[high], err, len(blockBytes))
 
 	}
-	return &blockBinSearchResult{
-		Block:           block,
+	return &entryLookupResult{
+		Entry:           block,
 		NextEntryOffset: nextOffset,
 		Found:           false,
 	}, nil
 }
 
-func (r *Reader) findKeyEntry(startEntry blockEntry, blockBytes []byte, entryOffset uint32, key, prevKey []byte) (*blockBinSearchResult, error) {
-	// TODO: do a linear search starting from index block at m until key is found or next index block key is greater than search key
+type scanResult struct {
+	Entry Entry
+	Found bool
+}
+
+func (r *Reader) scanForKey(startEntry Entry, blockBytes []byte, entryOffset uint32, key, prevKey []byte) (*scanResult, error) {
 	fmt.Println("Block for Key not found looking for block ")
 	fmt.Println("Start blcok key:", string(startEntry.GetUnsharedKey()))
 	fmt.Println("--------------------------------")
-	var lastEntry blockEntry
-	var currentEntry blockEntry = startEntry
+	var lastEntry Entry
+	var currentEntry Entry = startEntry
 	var nextOffset uint32 = entryOffset
 	var err error
 
@@ -232,13 +234,13 @@ func (r *Reader) findKeyEntry(startEntry blockEntry, blockBytes []byte, entryOff
 		fmt.Println("comparing", string(fullKey), string(key), "result", bytes.Compare(fullKey, key))
 		cmp := bytes.Compare(fullKey, key)
 		if cmp == 0 {
-			return &blockBinSearchResult{
-				Block: lastEntry,
+			return &scanResult{
+				Entry: lastEntry,
 				Found: true,
 			}, nil
 		} else if cmp > 0 {
-			return &blockBinSearchResult{
-				Block: lastEntry,
+			return &scanResult{
+				Entry: lastEntry,
 				Found: false,
 			}, nil
 		}
@@ -258,14 +260,14 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 
 	var indexEntry *IndexEntry
 
-	result, err := r.binSearchBlock(Index, r.idxBlockBytes, key, r.idxBlock.RestartPoints)
+	result, err := r.findFloorRestartPoint(Index, r.idxBlockBytes, key, r.idxBlock.RestartPoints)
 	if err != nil {
 		return nil, fmt.Errorf("failed to binary search index block: %w", err)
 	}
 
 	fmt.Println("Binary search result found:", result.Found)
 	if result.Found {
-		indexEntry = result.Block.(*IndexEntry)
+		indexEntry = result.Entry.(*IndexEntry)
 		fmt.Println("Key block found", indexEntry)
 		block, err := r.loadDataBlock(indexEntry.BlockHandle)
 		if err != nil {
@@ -274,12 +276,12 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 		fmt.Println("Value:", string(block.Entries[0].Value))
 		return block.Entries[0].Value, nil
 	} else {
-		searchResult, err := r.findKeyEntry(result.Block, r.idxBlockBytes, result.NextEntryOffset, key, []byte{})
+		searchResult, err := r.scanForKey(result.Entry, r.idxBlockBytes, result.NextEntryOffset, key, []byte{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to find key entry: %w", err)
 		}
 
-		indexEntry = searchResult.Block.(*IndexEntry)
+		indexEntry = searchResult.Entry.(*IndexEntry)
 		blockBytes, err := r.loadBlock(indexEntry.BlockHandle)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load data block: %w", err)
@@ -294,20 +296,20 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 			return block.Entries[0].Value, nil
 		}
 		//
-		sResult, err := r.binSearchBlock(Data, blockBytes, key, block.RestartPoints)
+		sResult, err := r.findFloorRestartPoint(Data, blockBytes, key, block.RestartPoints)
 		if err != nil {
 			return nil, fmt.Errorf("failed to binary search data block: %w", err)
 		}
 
 		if sResult.Found {
-			entry := sResult.Block.(*BlockEntry)
+			entry := sResult.Entry.(*BlockEntry)
 			fmt.Println("Value:", string(entry.Value))
 			return entry.Value, nil
 		}
 
-		findResult, err := r.findKeyEntry(sResult.Block, blockBytes, sResult.NextEntryOffset, key, []byte{})
+		findResult, err := r.scanForKey(sResult.Entry, blockBytes, sResult.NextEntryOffset, key, []byte{})
 		if findResult.Found {
-			entry := findResult.Block.(*BlockEntry)
+			entry := findResult.Entry.(*BlockEntry)
 			fmt.Println("Value:", string(entry.Value))
 			return entry.Value, nil
 		} else {
@@ -320,13 +322,13 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 
 }
 
-type blockEntry interface {
+type Entry interface {
 	GetUnsharedKey() []byte
 	GetSharedKeyLen() uint32
 }
 
 // readIndexEntryAtOffset reads an index entry at the given offset a block and returns the entry and the offset of the next entry
-func (r *Reader) readBlockEntryAtOffset(blockType BlockType, blockBytes []byte, offset uint32) (blockEntry, uint32, error) {
+func (r *Reader) readBlockEntryAtOffset(blockType BlockType, blockBytes []byte, offset uint32) (Entry, uint32, error) {
 	reader := bytes.NewReader(blockBytes)
 
 	if _, err := reader.Seek(int64(offset), io.SeekStart); err != nil {
