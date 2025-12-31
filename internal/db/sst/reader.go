@@ -6,15 +6,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 )
 
+type Entry interface {
+	GetUnsharedKey() []byte
+	GetSharedKeyLen() uint32
+}
 type Reader struct {
 	io.ReadSeekCloser
-	idxBlock       *IndexBlock
-	idxBlockBytes  []byte
-	idxBlockReader *bytes.Reader
+	idxBlock        *IndexBlock
+	idxEntriesBytes []byte
 }
 
 func NewFileReader(path string) (*Reader, error) {
@@ -36,27 +40,19 @@ func NewReader(rsc io.ReadSeekCloser) (*Reader, error) {
 		return nil, err
 	}
 
-	r.idxBlockBytes, err = r.loadBlock(footer.BlockHandle)
+	idxBlockBytes, err := r.loadBlock(footer.BlockHandle)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read index block: %w", err)
 	}
 	r.idxBlock = &IndexBlock{}
-	if err := proto.Unmarshal(r.idxBlockBytes, r.idxBlock); err != nil {
+	if err := proto.Unmarshal(idxBlockBytes, r.idxBlock); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal sstable index block: %w", err)
 	}
 
-	r.idxBlockReader = bytes.NewReader(r.idxBlockBytes)
-
-	// Protobuf encodes data like this for the IndexBlock field
-	// message IndexBlock {
-	//   repeated IndexEntry entries = 1;
-	//   repeated uint32 restart_points = 2;
-	// }
-	// The index entries field is stored like:
-	// [field tag + wire type] (uvarint)
-	// The repeated entries are stored as length-delimited fields:
-	// [length of entry] [serialized IndexEntry bytes] [length of entry] [serialized IndexEntry bytes] ...
-	// the offset in the restart points does not
+	r.idxEntriesBytes, err = proto.Marshal(r.idxBlock.IndexEntries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal index entries: %w", err)
+	}
 
 	return r, nil
 
@@ -129,10 +125,10 @@ func (r *Reader) loadDataBlock(bh *BlockHandle) (*DataBlock, error) {
 }
 
 func (r *Reader) readDataBlock(i int) (*DataBlock, error) {
-	if i >= len(r.idxBlock.Entries) {
+	if i >= len(r.idxBlock.IndexEntries.Entries) {
 		return nil, io.EOF
 	}
-	bh := r.idxBlock.Entries[i].BlockHandle
+	bh := r.idxBlock.IndexEntries.Entries[i].BlockHandle
 	blockData, err := r.loadBlock(bh)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load data block: %w", err)
@@ -172,16 +168,18 @@ type entryLookupResult struct {
 // forward scan). The returned searchResult includes the located entry and
 // the offset of the next entry for continued iteration.
 func (r *Reader) findFloorRestartPoint(blockType BlockType, blockBytes []byte, key []byte, restartPoints []uint32) (*entryLookupResult, error) {
+
 	low := 0
 	high := len(restartPoints) - 1
 
 	for low <= high {
 		m := low + (high-low)/2
 
-		offset := restartPoints[m]
-		block, nextOffset, err := r.readBlockEntryAtOffset(blockType, blockBytes, offset)
+		// start := time.Now()
+		block, nextOffset, err := r.readBlockEntryAtOffset(blockType, blockBytes, restartPoints[m])
+		// fmt.Println("Time taken to read block entry at offset:", time.Since(start))
 		if err != nil {
-			return nil, fmt.Errorf("failed to read index entry at offset %d: %s: %d", offset, err, len(blockBytes))
+			return nil, fmt.Errorf("failed to read index entry at offset %d: %s: %d", restartPoints[m], err, len(blockBytes))
 		}
 
 		cmp := bytes.Compare(block.GetUnsharedKey(), key)
@@ -201,9 +199,9 @@ func (r *Reader) findFloorRestartPoint(blockType BlockType, blockBytes []byte, k
 	// low is now greater than high (by 1 because low will eventually be the same as high and the last step will ensure low=high+1).
 	// Low has moved past all values less than the key and high is at the last value less than the key
 	// Low will pass the target key by one position, so we return high as the floor value
-	block, nextOffset, err := r.readBlockEntryAtOffset(blockType, r.idxBlockBytes, r.idxBlock.RestartPoints[high])
+	block, nextOffset, err := r.readBlockEntryAtOffset(blockType, blockBytes, restartPoints[high])
 	if err != nil {
-		return nil, fmt.Errorf("failed to read index entry at offset %d: %s: %d", r.idxBlock.RestartPoints[high], err, len(blockBytes))
+		return nil, fmt.Errorf("failed to read index entry at offset %d: %s: %d", restartPoints[high], err, len(blockBytes))
 
 	}
 	return &entryLookupResult{
@@ -218,10 +216,25 @@ type scanResult struct {
 	Found bool
 }
 
-func (r *Reader) scanForKey(startEntry Entry, blockBytes []byte, entryOffset uint32, key, prevKey []byte) (*scanResult, error) {
-	fmt.Println("Block for Key not found looking for block ")
-	fmt.Println("Start blcok key:", string(startEntry.GetUnsharedKey()))
-	fmt.Println("--------------------------------")
+// scanKey performs a forward linear scan through a block starting at the
+// provided entry and offset, reconstructing full keys using shared-prefix
+// decoding. It compares each full key to the target key and returns a
+// scanResult describing the outcome.
+//
+// For data blocks, this function returns Found = true if the exact key is
+// encountered. Otherwise it returns Found = false along with the last entry
+// whose key is less than the target (the floor entry), which is the correct
+// position to resume iteration.
+//
+// For index blocks, scanKey returns the floor entry corresponding to the
+// data block that may contain the given key.
+//
+// The caller is responsible for supplying the initial entry and its offset
+// (typically obtained from a restart-point binary search). The returned
+// entryLookupResult includes the located entry, the next entry offset, and an
+// indicator of whether the key was matched exactly.
+func (r *Reader) scanForKey(blockType BlockType, startEntry Entry, blockBytes []byte, entryOffset uint32, key, prevKey []byte) (*scanResult, error) {
+
 	var lastEntry Entry
 	var currentEntry Entry = startEntry
 	var nextOffset uint32 = entryOffset
@@ -229,9 +242,6 @@ func (r *Reader) scanForKey(startEntry Entry, blockBytes []byte, entryOffset uin
 
 	for {
 		fullKey := append([]byte(prevKey[:currentEntry.GetSharedKeyLen()]), []byte(currentEntry.GetUnsharedKey())...)
-		fmt.Println("Full key:", string(fullKey))
-		// break
-		fmt.Println("comparing", string(fullKey), string(key), "result", bytes.Compare(fullKey, key))
 		cmp := bytes.Compare(fullKey, key)
 		if cmp == 0 {
 			return &scanResult{
@@ -245,10 +255,16 @@ func (r *Reader) scanForKey(startEntry Entry, blockBytes []byte, entryOffset uin
 			}, nil
 		}
 		lastEntry = currentEntry
-		currentEntry, nextOffset, err = r.readBlockEntryAtOffset(Index, blockBytes, uint32(entryOffset))
+		if entryOffset >= uint32(len(blockBytes)) {
+			return &scanResult{
+				Entry: lastEntry,
+				Found: false,
+			}, nil
+		}
+		currentEntry, nextOffset, err = r.readBlockEntryAtOffset(blockType, blockBytes, uint32(entryOffset))
 		if err != nil {
 			// TODO: NEXT need to remove blockHandle from the blockBytes before passing it here to ensure we don't read past the block
-			return nil, fmt.Errorf("failed to read index entry at offset %d: %w %d", entryOffset, err, len(blockBytes))
+			return nil, fmt.Errorf("failed to read index entry at offset %d: %w", entryOffset, err)
 		}
 		entryOffset = nextOffset
 		prevKey = fullKey
@@ -259,26 +275,24 @@ func (r *Reader) scanForKey(startEntry Entry, blockBytes []byte, entryOffset uin
 func (r *Reader) Get(key []byte) ([]byte, error) {
 
 	var indexEntry *IndexEntry
-
-	result, err := r.findFloorRestartPoint(Index, r.idxBlockBytes, key, r.idxBlock.RestartPoints)
+	start := time.Now()
+	result, err := r.findFloorRestartPoint(Index, r.idxEntriesBytes, key, r.idxBlock.RestartPoints)
 	if err != nil {
 		return nil, fmt.Errorf("failed to binary search index block: %w", err)
 	}
+	fmt.Println("Time taken to binary search index block:", time.Since(start))
 
-	fmt.Println("Binary search result found:", result.Found)
 	if result.Found {
 		indexEntry = result.Entry.(*IndexEntry)
-		fmt.Println("Key block found", indexEntry)
 		block, err := r.loadDataBlock(indexEntry.BlockHandle)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load data block: %w", err)
 		}
-		fmt.Println("Value:", string(block.Entries[0].Value))
-		return block.Entries[0].Value, nil
+		return block.DataBlockEntries.Entries[0].Value, nil
 	} else {
-		searchResult, err := r.scanForKey(result.Entry, r.idxBlockBytes, result.NextEntryOffset, key, []byte{})
+		searchResult, err := r.scanForKey(Index, result.Entry, r.idxEntriesBytes, result.NextEntryOffset, key, []byte{})
 		if err != nil {
-			return nil, fmt.Errorf("failed to find key entry: %w", err)
+			return nil, fmt.Errorf("failed to find key entry at offset: %w", err)
 		}
 
 		indexEntry = searchResult.Entry.(*IndexEntry)
@@ -291,23 +305,28 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 			return nil, fmt.Errorf("failed to unmarshal sstable data block: %w", err)
 		}
 
+		dataBlockBytes, err := proto.Marshal(block.DataBlockEntries)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal data block entries: %w", err)
+		}
 		if searchResult.Found {
-			fmt.Println("Value:", string(block.Entries[0].Value))
-			return block.Entries[0].Value, nil
+			return block.DataBlockEntries.Entries[0].Value, nil
 		}
 		//
-		sResult, err := r.findFloorRestartPoint(Data, blockBytes, key, block.RestartPoints)
+		sResult, err := r.findFloorRestartPoint(Data, dataBlockBytes, key, block.RestartPoints)
 		if err != nil {
 			return nil, fmt.Errorf("failed to binary search data block: %w", err)
 		}
 
 		if sResult.Found {
-			entry := sResult.Entry.(*BlockEntry)
-			fmt.Println("Value:", string(entry.Value))
-			return entry.Value, nil
+			return sResult.Entry.(*BlockEntry).Value, nil
 		}
 
-		findResult, err := r.scanForKey(sResult.Entry, blockBytes, sResult.NextEntryOffset, key, []byte{})
+		findResult, err := r.scanForKey(Data, sResult.Entry, dataBlockBytes, sResult.NextEntryOffset, key, []byte{})
+		if err != nil {
+			fmt.Println("Block length:", len(dataBlockBytes), sResult.NextEntryOffset, sResult.Entry.(*BlockEntry))
+			return nil, fmt.Errorf("failed to scan data block for key: %w", err)
+		}
 		if findResult.Found {
 			entry := findResult.Entry.(*BlockEntry)
 			fmt.Println("Value:", string(entry.Value))
@@ -322,14 +341,11 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 
 }
 
-type Entry interface {
-	GetUnsharedKey() []byte
-	GetSharedKeyLen() uint32
-}
-
 // readIndexEntryAtOffset reads an index entry at the given offset a block and returns the entry and the offset of the next entry
 func (r *Reader) readBlockEntryAtOffset(blockType BlockType, blockBytes []byte, offset uint32) (Entry, uint32, error) {
+
 	reader := bytes.NewReader(blockBytes)
+	s := time.Now()
 
 	if _, err := reader.Seek(int64(offset), io.SeekStart); err != nil {
 		return nil, 0, fmt.Errorf("failed to seek to index entry offset %d: %w", offset, err)
@@ -354,6 +370,7 @@ func (r *Reader) readBlockEntryAtOffset(blockType BlockType, blockBytes []byte, 
 	if _, err := reader.Read(entryBytes); err != nil {
 		return nil, 0, fmt.Errorf("failed to read index entry key: %w", err)
 	}
+	fmt.Println("Time before:", time.Since(s))
 
 	end := uint32(reader.Len())
 	nextOffset := offset + (start - end)
@@ -363,6 +380,7 @@ func (r *Reader) readBlockEntryAtOffset(blockType BlockType, blockBytes []byte, 
 		if err := proto.Unmarshal(entryBytes, indexEntry); err != nil {
 			return nil, 0, fmt.Errorf("failed to unmarshal index entry: %w", err)
 		}
+		fmt.Println("Time taken to seek to offset:", time.Since(s))
 
 		return indexEntry, nextOffset, nil
 	case Data:
@@ -370,7 +388,10 @@ func (r *Reader) readBlockEntryAtOffset(blockType BlockType, blockBytes []byte, 
 		if err := proto.Unmarshal(entryBytes, dataEntry); err != nil {
 			return nil, 0, fmt.Errorf("failed to unmarshal data block entry: %w", err)
 		}
+		fmt.Println("Time taken to seek to offset:", time.Since(s))
+
 		return dataEntry, nextOffset, nil
+
 	default:
 		return nil, 0, fmt.Errorf("unknown block type: %d", blockType)
 	}

@@ -31,7 +31,7 @@ func NewWriter(w io.Writer) (*Writer, error) {
 	return &Writer{
 		w:   w,
 		bw:  bufio.NewWriter(w),
-		brc: 1,
+		brc: 10,
 	}, nil
 }
 
@@ -55,7 +55,9 @@ func (w *Writer) writeBlock(data []byte) (n int, err error) {
 func (w *Writer) Write(it memtable.Iterator) (uint32, error) {
 	i := 0
 	offset := uint32(0)
-	indexBlock := &IndexBlock{}
+	indexBlock := &IndexBlock{
+		IndexEntries: &IndexEntries{},
+	}
 	indexBlockOffset := uint32(0)
 
 	var prevKey []byte
@@ -79,7 +81,7 @@ func (w *Writer) Write(it memtable.Iterator) (uint32, error) {
 
 		// compressed key calculation
 		s := 0
-		if len(indexBlock.Entries)%int(w.brc) == 0 {
+		if len(indexBlock.IndexEntries.Entries)%int(w.brc) == 0 {
 			indexBlock.RestartPoints = append(indexBlock.RestartPoints, indexBlockOffset)
 
 		} else {
@@ -95,12 +97,13 @@ func (w *Writer) Write(it memtable.Iterator) (uint32, error) {
 				Size:   uint32(blockSize),
 			},
 		}
-		indexBlock.Entries = append(indexBlock.Entries, indexEntry)
+		indexBlock.IndexEntries.Entries = append(indexBlock.IndexEntries.Entries, indexEntry)
 		entrySize := uint32(proto.Size(indexEntry))
 		// each entry consists of the size varint + field tag + entry bytes
+
 		indexBlockOffset += entrySize + 1 + uint32(protowire.SizeVarint(uint64(entrySize))) // +1 for the field tag
 		offset += uint32(blockSize)
-		i += len(block.Entries)
+		i += len(block.DataBlockEntries.Entries)
 	}
 	if !errors.Is(it.Error(), io.EOF) {
 		return uint32(i), fmt.Errorf("failed to flush memtable to sstable: %w", it.Error())
@@ -150,13 +153,15 @@ func (w *Writer) Write(it memtable.Iterator) (uint32, error) {
 // It returns the created DataBlock and any error encountered.
 func (w *Writer) createDataBlock(it memtable.Iterator) (*DataBlock, error) {
 	var prevKey []byte
-	block := &DataBlock{}
+	block := &DataBlock{
+		DataBlockEntries: &DataBlockEntries{},
+	}
 	bfSize := uint32(0) // initial size for restart point count
 	offset := uint32(0)
 	for it.Error() == nil {
 		m := it.Data()
 		s := 0
-		if len(block.Entries)%int(w.brc) == 0 {
+		if len(block.DataBlockEntries.Entries)%int(w.brc) == 0 {
 			block.RestartPoints = append(block.RestartPoints, offset)
 			bfSize += 4 // TODO: optimize this as proto will encode as varint and we are assuming fixed 4 bytes here
 		} else {
@@ -178,7 +183,7 @@ func (w *Writer) createDataBlock(it memtable.Iterator) (*DataBlock, error) {
 			return block, nil
 		}
 		// encoder is setup to write to block buffer
-		block.Entries = append(block.Entries, record)
+		block.DataBlockEntries.Entries = append(block.DataBlockEntries.Entries, record)
 		// we can't just add the record size as the DataBlock will be encoded with protobuf which adds extra bytes for field tags and size varints
 		// Datablock looks like this:
 		// message DataBlock {
@@ -189,6 +194,7 @@ func (w *Writer) createDataBlock(it memtable.Iterator) (*DataBlock, error) {
 		// [field tag + wire type] (uvarint)
 		// [length of entry] [serialized BlockEntry bytes] [length of entry] [serialized BlockEntry bytes] ...
 		// so we need to account for the field tag and size varint for each entry
+
 		offset += recordSize + uint32(protowire.SizeVarint(uint64(recordSize))) + 1 // +1 for the field tag
 		it.Next()
 	}

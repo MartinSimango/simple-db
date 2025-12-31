@@ -23,7 +23,7 @@ func (i *Iterator) Entry() *BlockEntry {
 	if i.block == nil || i.err != nil {
 		return nil
 	}
-	return i.block.Entries[i.entryIndex]
+	return i.block.DataBlockEntries.Entries[i.entryIndex]
 }
 
 func (i *Iterator) Key() []byte {
@@ -44,7 +44,7 @@ func (i *Iterator) Next() bool {
 	}
 
 	var err error
-	if i.block == nil || i.entryIndex+1 >= len(i.block.Entries) {
+	if i.block == nil || i.entryIndex+1 >= len(i.block.DataBlockEntries.Entries) {
 		i.blockIndex++
 		i.entryIndex = 0
 		i.prevKey = ""
@@ -56,7 +56,7 @@ func (i *Iterator) Next() bool {
 		return true
 	}
 
-	entry := i.block.Entries[i.entryIndex]
+	entry := i.block.DataBlockEntries.Entries[i.entryIndex]
 	i.prevKey = i.prevKey[:entry.SharedKeyLen] + string(entry.UnsharedKey)
 	i.entryIndex++
 

@@ -30,16 +30,23 @@ message IndexEntry {
     BlockHandle block_handle = 3;  
 }
 
-message DataBlock {
+message DataBlockEntries {
     repeated BlockEntry entries = 1;
+}
+
+message DataBlock {
+    DataBlockEntries data_block_entries = 1;
     repeated uint32 restart_points = 2;
+}
+
+message IndexEntries {
+    repeated IndexEntry entries = 1;
 }
 
 message IndexBlock {
-    repeated IndexEntry entries = 1;
+    IndexEntries index_entries = 1;
     repeated uint32 restart_points = 2;
 }
-
 
 message Footer {
     BlockHandle blockHandle = 1;

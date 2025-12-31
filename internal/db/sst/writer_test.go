@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/MartinSimango/simple-db/internal/db"
 	"github.com/MartinSimango/simple-db/internal/db/memtable"
@@ -32,7 +33,7 @@ func TestWriter_Write(t *testing.T) {
 	defer s.Close()
 
 	memTable := memtable.NewTable(memtable.MapType)
-	memTableSize := 1000
+	memTableSize := 10000
 	for i := 0; i < memTableSize; i++ {
 		memTable.Put(db.RecordType_PUT, fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
 
@@ -83,6 +84,14 @@ func TestWriter_Write(t *testing.T) {
 	}
 
 	// r.Get([]byte("key1"))
-	fmt.Println(r.Get([]byte("key7")))
+	start := time.Now()
+	value, err := r.Get([]byte("key1000"))
+	fmt.Println("Time taken to get key145:", time.Since(start))
+	fmt.Println(string(value), err)
+
+	start = time.Now()
+	value, err = r.Get([]byte("key1000"))
+	fmt.Println("Time taken to get key145:", time.Since(start))
+	fmt.Println(string(value), err)
 
 }
