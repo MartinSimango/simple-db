@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -245,7 +244,7 @@ func (r *Reader) scanForKey(startEntry *Entry, blockBytes []byte, entryOffset ui
 		cmp := bytes.Compare(fullKey, key)
 		if cmp == 0 {
 			return &scanResult{
-				Entry: lastEntry,
+				Entry: currentEntry,
 				Found: true,
 			}, nil
 		} else if cmp > 0 {
@@ -274,12 +273,10 @@ func (r *Reader) scanForKey(startEntry *Entry, blockBytes []byte, entryOffset ui
 func (r *Reader) Get(key []byte) ([]byte, error) {
 
 	var indexEntry *IndexEntry
-	t := time.Now()
 	result, err := r.findFloorRestartPoint(r.idxEntriesBytes, key, r.idxBlock.RestartPoints)
 	if err != nil {
 		return nil, fmt.Errorf("failed to binary search index block: %w", err)
 	}
-	fmt.Println("Time taken to search index block:", time.Since(t))
 
 	if result.Found {
 		indexEntry, err = result.Entry.UnmarshalIndexEntry()
@@ -301,6 +298,7 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal index entry: %w", err)
 		}
+
 		blockBytes, err := r.loadBlock(indexEntry.BlockHandle)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load data block: %w", err)
@@ -333,6 +331,7 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 		}
 
 		findResult, err := r.scanForKey(sResult.Entry, dataBlockBytes, sResult.NextEntryOffset, key, []byte{})
+		fmt.Println("SCan Result Found:", findResult.Found)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan data block for key: %w", err)
 		}

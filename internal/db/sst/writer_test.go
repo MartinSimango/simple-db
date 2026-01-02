@@ -85,12 +85,12 @@ func TestWriter_Write(t *testing.T) {
 
 	// r.Get([]byte("key1"))
 	start := time.Now()
-	value, err := r.Get([]byte("key1000"))
+	value, err := r.Get([]byte("key1234"))
 	fmt.Println("Time taken to get key145:", time.Since(start))
 	fmt.Println(string(value), err)
 
 	start = time.Now()
-	value, err = r.Get([]byte("key1000"))
+	value, err = r.Get([]byte("key1234"))
 	fmt.Println("Time taken to get key145:", time.Since(start))
 	fmt.Println(string(value), err)
 
