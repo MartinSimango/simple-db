@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -275,157 +274,61 @@ func (r *Reader) scanForKey(startEntry *entry, blockBytes []byte, key []byte) (*
 	}
 }
 
-func (r *Reader) Get(key []byte) ([]byte, error) {
-
-	var indexEntry *IndexEntry
-	t := time.Now()
-	result, err := r.findFloorRestartPoint(r.idxEntriesBytes, key, r.idxBlock.RestartPoints)
+func (r *Reader) find(key, blockBytes []byte, restartPoints []uint32) (*lookupResult, error) {
+	result, err := r.findFloorRestartPoint(blockBytes, key, restartPoints)
 	if err != nil {
 		return nil, fmt.Errorf("failed to binary search index block: %w", err)
 	}
-	fmt.Println("Time taken to search index block:", time.Since(t))
 
 	if result.Found {
-		indexEntry, err = result.Entry.UnmarshalIndexEntry()
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal index entry: %w", err)
-		}
-		block, err := r.loadDataBlock(indexEntry.BlockHandle)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load data block: %w", err)
-		}
-		return block.DataBlockEntries.Entries[0].Value, nil
-	} else {
-		searchResult, err := r.scanForKey(result.Entry, r.idxEntriesBytes, key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to find key entry at offset: %w", err)
-		}
+		return result, nil
+	}
+	return r.scanForKey(result.Entry, blockBytes, key)
 
-		indexEntry, err = searchResult.Entry.UnmarshalIndexEntry()
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal index entry: %w", err)
-		}
+}
 
-		blockBytes, err := r.loadBlock(indexEntry.BlockHandle)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load data block: %w", err)
-		}
-		block := &DataBlock{}
-		if err := proto.Unmarshal(blockBytes, block); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal sstable data block: %w", err)
-		}
+func (r *Reader) Get(key []byte) ([]byte, error) {
 
-		dataBlockBytes, err := proto.Marshal(block.DataBlockEntries)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal data block entries: %w", err)
-		}
-		if searchResult.Found {
-			return block.DataBlockEntries.Entries[0].Value, nil
-		}
-		//
-		sResult, err := r.findFloorRestartPoint(dataBlockBytes, key, block.RestartPoints)
-		if err != nil {
-			return nil, fmt.Errorf("failed to binary search data block: %w", err)
-		}
-
-		if sResult.Found {
-			if e, err := sResult.Entry.UnmarshalDataBlockEntry(); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal data block entry: %w", err)
-			} else {
-				return e.Value, nil
-			}
-
-		}
-
-		findResult, err := r.scanForKey(sResult.Entry, dataBlockBytes, key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan data block for key: %w", err)
-		}
-		if findResult.Found {
-			entry, err := findResult.Entry.UnmarshalDataBlockEntry()
-			if err != nil {
-				return nil, fmt.Errorf("failed to unmarshal data block entry: %w", err)
-			}
-			fmt.Println("Value:", string(entry.Value))
-			return entry.Value, nil
-		} else {
-			fmt.Println("Key not found")
-		}
-
-		return nil, fmt.Errorf("key not found")
-
+	// Find the index entry for the key
+	indexLookupResult, err := r.find(key, r.idxEntriesBytes, r.idxBlock.RestartPoints)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find index entry for key: %w", err)
 	}
 
-}
-
-// entry represents a raw block entry read from an SSTable block.
-type entry struct {
-	Size   uint32 // size of the entry in bytes including field tag and size varint
-	Bytes  []byte // raw bytes of the entry excluding field tag and size varint
-	Offset uint32 // offset of entry within block
-}
-
-type EntryKey struct {
-	UnsharedKey  []byte
-	SharedKeyLen uint32
-}
-
-func (e *entry) UnmarshalIndexEntry() (*IndexEntry, error) {
-	indexEntry := &IndexEntry{}
-
-	if err := proto.Unmarshal(e.Bytes, indexEntry); err != nil {
+	indexEntry, err := indexLookupResult.Entry.UnmarshalIndexEntry()
+	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal index entry: %w", err)
 	}
-	return indexEntry, nil
-}
 
-func (e *entry) UnmarshalDataBlockEntry() (*BlockEntry, error) {
-	dataEntry := &BlockEntry{}
-	if err := proto.Unmarshal(e.Bytes, dataEntry); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal data block entry: %w", err)
-	}
-	return dataEntry, nil
-}
-
-func (e *entry) EntryKey() (*EntryKey, error) {
-	var sharedKeyLen uint64
-	r := bytes.NewReader(e.Bytes)
-	// read field tag and wire type
-	_, err := binary.ReadUvarint(r)
+	// Now find the data block entry for the key
+	block, err := r.loadDataBlock(indexEntry.BlockHandle)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read entry field tag data: %w", err)
+		return nil, fmt.Errorf("failed to load data block: %w", err)
 	}
 
-	// read entry size
-	unsharedKeySize, err := binary.ReadUvarint(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read unshared key size: %w", err)
+	if indexLookupResult.Found {
+		return block.DataBlockEntries.Entries[0].Value, nil
 	}
-	unsharedKey := make([]byte, unsharedKeySize)
-	_, err = r.Read(unsharedKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read unshared key: %w", err)
-	}
-	// read shared key len wire type and field tag
-	field, err := binary.ReadUvarint(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read shared key len field tag data: %w", err)
-	}
-	n, _ := protowire.DecodeTag(field)
 
-	if n == 2 {
-		sharedKeyLen, err = binary.ReadUvarint(r)
+	dataBlockBytes, err := proto.Marshal(block.DataBlockEntries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal data block entries: %w", err)
+	}
+	dataLookupResult, err := r.find(key, dataBlockBytes, block.RestartPoints)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to binary search data block: %w", err)
+	}
+
+	if dataLookupResult.Found {
+		dataEntry, err := dataLookupResult.Entry.UnmarshalDataBlockEntry()
 		if err != nil {
-			return nil, fmt.Errorf("failed to read shared key len data: %w", err)
+			return nil, fmt.Errorf("failed to unmarshal data block entry: %w", err)
 		}
+		return dataEntry.Value, nil
 	}
+	return nil, fmt.Errorf("key not found")
 
-	// read shared key len
-
-	return &EntryKey{
-		UnsharedKey:  unsharedKey,
-		SharedKeyLen: uint32(sharedKeyLen),
-	}, nil
 }
 
 // readIndexEntryAtOffset reads an index entry at the given offset a block and returns the entry and the offset of the next entry
@@ -469,4 +372,74 @@ func (r *Reader) readBlockEntryAtOffset(reader *bytes.Reader, offset uint32) (*e
 
 func (r *Reader) Close() error {
 	return r.ReadSeekCloser.Close()
+}
+
+// entry represents a raw block entry read from an SSTable block.
+type entry struct {
+	Size   uint32 // size of the entry in bytes including field tag and size varint
+	Bytes  []byte // raw bytes of the entry excluding field tag and size varint
+	Offset uint32 // offset of entry within block
+}
+
+type entryKey struct {
+	UnsharedKey  []byte
+	SharedKeyLen uint32
+}
+
+func (e *entry) UnmarshalIndexEntry() (*IndexEntry, error) {
+	indexEntry := &IndexEntry{}
+
+	if err := proto.Unmarshal(e.Bytes, indexEntry); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal index entry: %w", err)
+	}
+	return indexEntry, nil
+}
+
+func (e *entry) UnmarshalDataBlockEntry() (*BlockEntry, error) {
+	dataEntry := &BlockEntry{}
+	if err := proto.Unmarshal(e.Bytes, dataEntry); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal data block entry: %w", err)
+	}
+	return dataEntry, nil
+}
+
+func (e *entry) EntryKey() (*entryKey, error) {
+	var sharedKeyLen uint64
+	r := bytes.NewReader(e.Bytes)
+	// read field tag and wire type
+	_, err := binary.ReadUvarint(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read entry field tag data: %w", err)
+	}
+
+	// read entry size
+	unsharedKeySize, err := binary.ReadUvarint(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read unshared key size: %w", err)
+	}
+	unsharedKey := make([]byte, unsharedKeySize)
+	_, err = r.Read(unsharedKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read unshared key: %w", err)
+	}
+	// read shared key len wire type and field tag
+	field, err := binary.ReadUvarint(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read shared key len field tag data: %w", err)
+	}
+	n, _ := protowire.DecodeTag(field)
+
+	if n == 2 { // if n != 2, then shared key len is simply 0 as protobuf omits zero values
+		sharedKeyLen, err = binary.ReadUvarint(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read shared key len data: %w", err)
+		}
+	}
+
+	// read shared key len
+
+	return &entryKey{
+		UnsharedKey:  unsharedKey,
+		SharedKeyLen: uint32(sharedKeyLen),
+	}, nil
 }
