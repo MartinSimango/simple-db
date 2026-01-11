@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
+	"github.com/MartinSimango/simple-db/internal/db/cache"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
@@ -24,20 +26,22 @@ type Reader struct {
 	io.ReadSeekCloser
 	idxBlock        *IndexBlock
 	idxEntriesBytes []byte
+	cache           cache.Cache
 }
 
-func NewFileReader(path string) (*Reader, error) {
+func NewFileReader(path string, cache cache.Cache) (*Reader, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sstable file: %w", err)
 	}
-	return NewReader(f)
+	return NewReader(f, cache)
 }
 
-func NewReader(rsc io.ReadSeekCloser) (*Reader, error) {
+func NewReader(rsc io.ReadSeekCloser, cache cache.Cache) (*Reader, error) {
 
 	r := &Reader{
 		ReadSeekCloser: rsc,
+		cache:          cache,
 	}
 
 	footer, err := r.readFooter()
@@ -116,8 +120,13 @@ func (r *Reader) loadBlock(bh *BlockHandle) ([]byte, error) {
 	return blockBuffer, nil
 }
 
+var dataBlockCache = make(map[uint32]*DataBlock)
+
 func (r *Reader) loadDataBlock(bh *BlockHandle) (*DataBlock, error) {
 	// TODO: implement caching of data blocks
+	if block, ok := dataBlockCache[bh.Offset]; ok {
+		return block, nil
+	}
 	blockData, err := r.loadBlock(bh)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load data block: %w", err)
@@ -126,6 +135,7 @@ func (r *Reader) loadDataBlock(bh *BlockHandle) (*DataBlock, error) {
 	if err := proto.Unmarshal(blockData, block); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal sstable data block: %w", err)
 	}
+	dataBlockCache[bh.Offset] = block
 	return block, nil
 }
 
@@ -172,18 +182,28 @@ type lookupResult struct {
 // forward scan). The returned searchResult includes the located entry and
 // the offset of the next entry for continued iteration.
 func (r *Reader) findFloorRestartPoint(blockBytes []byte, key []byte, restartPoints []uint32) (*lookupResult, error) {
-
+	// TODO: this method is a bit slow due to repeated reading from bytes.Reader.
+	// what needs to be done is we need to parse the block into entries once and then
+	// do binary search on the entries directly instead of reading from the byte slice
+	// every time. This will be done later. So pass through a block like this:
+	// type parsedBlock struct {
+	//    entries []*entry // restart point entries
+	//    restartPoints []uint32
 	low := 0
 	high := len(restartPoints) - 1
 	reader := bytes.NewReader(blockBytes)
 	for low <= high {
 		m := low + (high-low)/2
 
+		t := time.Now()
 		entry, err := r.readBlockEntryAtOffset(reader, restartPoints[m])
 		if err != nil {
 			return nil, fmt.Errorf("failed to read index entry at offset %d: %s: %d", restartPoints[m], err, len(blockBytes))
 		}
+		fmt.Println("Time taken to read block entry at offset:", time.Since(t))
+		t = time.Now()
 		entryKey, err := entry.EntryKey()
+		fmt.Println("Time taken to read entry key:", time.Since(t))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read index entry key at offset %d: %s: %d", restartPoints[m], err, len(blockBytes))
 		}
@@ -274,59 +294,93 @@ func (r *Reader) scanForKey(startEntry *entry, blockBytes []byte, key []byte) (*
 	}
 }
 
+type parsedBlock struct {
+	entries       []*entry
+	restartPoints []uint32
+}
+
+// func parseBlock(blockBytes []byte, restartPoints []uint32) (*parsedBlock, error) {
+// 	entries := make([]*entry, 0)
+// 	reader := bytes.NewReader(blockBytes)
+// 	offset := uint32(0)
+// 	for {
+// 		if offset >= uint32(len(blockBytes)) {
+// 			break
+// 		}
+// 		entry, err := reader.Seek(int64(offset), io.SeekStart)
+
 func (r *Reader) find(key, blockBytes []byte, restartPoints []uint32) (*lookupResult, error) {
+
+	t := time.Now()
 	result, err := r.findFloorRestartPoint(blockBytes, key, restartPoints)
 	if err != nil {
 		return nil, fmt.Errorf("failed to binary search index block: %w", err)
 	}
+	fmt.Println("Time taken to find floor restart point:", time.Since(t))
 
 	if result.Found {
 		return result, nil
 	}
-	return r.scanForKey(result.Entry, blockBytes, key)
+	result, err = r.scanForKey(result.Entry, blockBytes, key)
 
+	return result, err
 }
 
 func (r *Reader) Get(key []byte) ([]byte, error) {
+	t := time.Now()
 
 	// Find the index entry for the key
 	indexLookupResult, err := r.find(key, r.idxEntriesBytes, r.idxBlock.RestartPoints)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find index entry for key: %w", err)
 	}
-
+	fmt.Println("Time taken to find index entry:", time.Since(t))
+	t = time.Now()
 	indexEntry, err := indexLookupResult.Entry.UnmarshalIndexEntry()
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal index entry: %w", err)
 	}
-
+	fmt.Println("Time taken to unmarshal index entry:", time.Since(t))
 	// Now find the data block entry for the key
+	t = time.Now()
+
+	// TODO: need to load datablock and need to cache data block bytes
+	//
 	block, err := r.loadDataBlock(indexEntry.BlockHandle)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load data block: %w", err)
 	}
+	fmt.Println("Time taken to load data block:", time.Since(t))
 
 	if indexLookupResult.Found {
 		return block.DataBlockEntries.Entries[0].Value, nil
 	}
 
+	t = time.Now()
 	dataBlockBytes, err := proto.Marshal(block.DataBlockEntries)
+	//
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal data block entries: %w", err)
 	}
+	fmt.Println("Time taken to marshal data block entries:", time.Since(t))
+	t = time.Now()
 	dataLookupResult, err := r.find(key, dataBlockBytes, block.RestartPoints)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to binary search data block: %w", err)
 	}
+	fmt.Println("Time taken to find data block entry:", time.Since(t))
 
 	if dataLookupResult.Found {
+		t = time.Now()
 		dataEntry, err := dataLookupResult.Entry.UnmarshalDataBlockEntry()
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal data block entry: %w", err)
 		}
+		fmt.Println("Time taken to unmarshal data block entry:", time.Since(t))
 		return dataEntry.Value, nil
 	}
+
 	return nil, fmt.Errorf("key not found")
 
 }
@@ -376,9 +430,28 @@ func (r *Reader) Close() error {
 
 // entry represents a raw block entry read from an SSTable block.
 type entry struct {
-	Size   uint32 // size of the entry in bytes including field tag and size varint
-	Bytes  []byte // raw bytes of the entry excluding field tag and size varint
-	Offset uint32 // offset of entry within block
+	Size         uint32 // size of the entry in bytes including field tag and size varint
+	Bytes        []byte // raw bytes of the entry excluding field tag and size varint
+	Offset       uint32 // offset of entry within block
+	unsharedKey  []byte
+	sharedKeyLen uint32
+}
+
+func newEntry(bytes []byte, offset uint32, size uint32) (*entry, error) {
+	e := &entry{
+		Bytes:  bytes,
+		Offset: offset,
+		Size:   size,
+	}
+	ek, err := e.EntryKey()
+	if err != nil {
+		return nil, err
+	}
+	e.unsharedKey = ek.UnsharedKey
+	e.sharedKeyLen = ek.SharedKeyLen
+
+	return e, nil
+
 }
 
 type entryKey struct {
@@ -403,6 +476,7 @@ func (e *entry) UnmarshalDataBlockEntry() (*BlockEntry, error) {
 	return dataEntry, nil
 }
 
+// TODO: remove this method and inline its logic where needed
 func (e *entry) EntryKey() (*entryKey, error) {
 	var sharedKeyLen uint64
 	r := bytes.NewReader(e.Bytes)

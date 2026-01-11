@@ -44,7 +44,7 @@ func TestWriter_Write(t *testing.T) {
 
 	// now read back and verify
 
-	r, err := sst.NewFileReader("sstable.sdb")
+	r, err := sst.NewFileReader("sstable.sdb", nil)
 	if err != nil {
 		t.Fatalf("failed to open sstable file: %+v", err)
 	}
