@@ -1,12 +1,23 @@
 package cache_test
 
 import (
+	"fmt"
 	"testing"
+
+	"github.com/MartinSimango/simple-db/internal/db/cache"
 )
 
 // TODO: add benchmarks and Fuzz tests
 func TestLRUCache_Get(t *testing.T) {
 
+	c := cache.NewLRUCache(2)
+	c.Put("a", []byte("Hello"))
+	c.Put("c", []byte("Hello"))
+	value, found := c.Get("a")
+
+	c.Put("b", []byte("Hello"))
+
+	fmt.Println(string(value), found)
 	tests := []struct {
 		name string
 	}{}
