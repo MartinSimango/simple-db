@@ -32,3 +32,29 @@ $(GOPATH)/bin/pkgsite:
 
 pkgsite: $(GOPATH)/bin/pkgsite
 	pkgsite -http=:8080 
+
+
+### TESTING
+
+.PHONY: test
+test:
+	go test -v ./...
+
+test-pretty:
+	go test ./...  -json | tparse -all
+
+test-integration:
+	go test -tags=integration ./internal/...
+
+test-integration-pretty:
+	go test -tags=integration ./internal/...  -json | tparse -all
+
+
+coverage:
+	go test -v -cover -coverprofile=c.out ./...
+
+coverage-html:
+	go tool cover -html=c.out -o coverage.html -func=c.out
+
+coverage-func:
+	go tool cover -func=c.out

@@ -1,34 +1,33 @@
 package cache
 
 import (
-	"fmt"
 	"sync"
 )
 
-type CacheNode struct {
+type CacheNode[T any] struct {
 	key   string
-	value []byte
-	prev  *CacheNode
-	next  *CacheNode
+	value T
+	prev  *CacheNode[T]
+	next  *CacheNode[T]
 }
 
 // LRUCache implements a Least Recently Used (LRU) cache using a DLL and a hashmap and capacity limit.
-type LRUCache struct {
+type LRUCache[T any] struct {
 	mu       sync.RWMutex
-	capacity int
-	hashMap  map[string]*CacheNode
-	head     *CacheNode
-	tail     *CacheNode
+	capacity uint
+	hashMap  map[string]*CacheNode[T]
+	head     *CacheNode[T]
+	tail     *CacheNode[T]
 }
 
-var _ Cache = (*LRUCache)(nil)
+var _ Cache[[]byte] = (*LRUCache[[]byte])(nil)
 
-func NewLRUCache(capacity int) *LRUCache {
-	lru := LRUCache{
+func NewLRUCache[T any](capacity uint) *LRUCache[T] {
+	lru := LRUCache[T]{
 		capacity: capacity,
-		hashMap:  make(map[string]*CacheNode),
-		head:     &CacheNode{},
-		tail:     &CacheNode{},
+		hashMap:  make(map[string]*CacheNode[T]),
+		head:     &CacheNode[T]{},
+		tail:     &CacheNode[T]{},
 	}
 	lru.head.next = lru.tail
 	lru.tail.prev = lru.head
@@ -37,7 +36,7 @@ func NewLRUCache(capacity int) *LRUCache {
 }
 
 // Get implements [Cache].
-func (l *LRUCache) Get(key string) ([]byte, bool) {
+func (l *LRUCache[T]) Get(key string) (T, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if v, exists := l.hashMap[key]; exists {
@@ -53,26 +52,28 @@ func (l *LRUCache) Get(key string) ([]byte, bool) {
 		l.head.next = v
 		return v.value, true
 	}
-	return nil, false
+	var zero T
+	return zero, false
 
 }
 
 // Put implements [Cache].
-func (l *LRUCache) Put(key string, value []byte) {
+func (l *LRUCache[T]) Put(key string, value T) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
+	if l.capacity == 0 {
+		return
+	}
 	v, exists := l.hashMap[key]
 	if !exists {
-		if len(l.hashMap) >= l.capacity {
-			fmt.Println("capacity reached, evicting LRU item: ", l.tail.prev.key)
+		if len(l.hashMap) >= int(l.capacity) {
 			// evict least recently used item
 			lru := l.tail.prev
 			if lru != l.head {
 				l.delete(lru.key)
 			}
 		}
-		node := &CacheNode{
+		node := &CacheNode[T]{
 			key:   key,
 			value: value,
 			next:  l.head.next,
@@ -98,13 +99,13 @@ func (l *LRUCache) Put(key string, value []byte) {
 }
 
 // Delete implements [Cache].
-func (l *LRUCache) Delete(key string) bool {
+func (l *LRUCache[T]) Delete(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.delete(key)
 }
 
-func (l *LRUCache) delete(key string) bool {
+func (l *LRUCache[T]) delete(key string) bool {
 	if v, exists := l.hashMap[key]; exists {
 		v.prev.next = v.next
 		v.next.prev = v.prev
@@ -115,22 +116,13 @@ func (l *LRUCache) delete(key string) bool {
 }
 
 // Capacity implements [Cache].
-func (l *LRUCache) Capacity() int {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	panic("unimplemented")
+func (l *LRUCache[T]) Capacity() uint {
+	return l.capacity
 }
 
 // Size implements [Cache].
-func (l *LRUCache) Size() int {
+func (l *LRUCache[T]) Size() uint {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	panic("unimplemented")
-}
-
-// SizeInBytes implements [Cache].
-func (l *LRUCache) SizeInBytes() int64 {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	panic("unimplemented")
+	return uint(len(l.hashMap))
 }

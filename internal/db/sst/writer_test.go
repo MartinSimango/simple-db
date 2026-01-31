@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 	"testing"
-	"time"
 
 	"github.com/MartinSimango/simple-db/internal/db"
+	"github.com/MartinSimango/simple-db/internal/db/cache"
 	"github.com/MartinSimango/simple-db/internal/db/memtable"
 	"github.com/MartinSimango/simple-db/internal/db/sst"
 	"github.com/google/go-cmp/cmp"
@@ -44,7 +44,7 @@ func TestWriter_Write(t *testing.T) {
 
 	// now read back and verify
 
-	r, err := sst.NewFileReader("sstable.sdb", nil)
+	r, err := sst.NewFileReader("sstable.sdb", cache.NewLRUCache[sst.DataBlockCache](1))
 	if err != nil {
 		t.Fatalf("failed to open sstable file: %+v", err)
 	}
@@ -83,15 +83,12 @@ func TestWriter_Write(t *testing.T) {
 		t.Fatalf("memtable iterator error: %+v", memIt.Error())
 	}
 
-	// r.Get([]byte("key1"))
-	start := time.Now()
-	value, err := r.Get([]byte("key1234"))
-	fmt.Println("Time taken to get key145:", time.Since(start))
-	fmt.Println(string(value), err)
-
-	start = time.Now()
-	value, err = r.Get([]byte("key1234"))
-	fmt.Println("Time taken to get key145:", time.Since(start))
-	fmt.Println(string(value), err)
+	// // r.Get([]byte("key1"))
+	// for i := 0; i < 10; i++ {
+	// 	start := time.Now()
+	// 	value, err := r.Get([]byte("key1234"))
+	// 	fmt.Println("Time taken to get key1234:", time.Since(start))
+	// 	fmt.Println(string(value), err)
+	// }
 
 }
