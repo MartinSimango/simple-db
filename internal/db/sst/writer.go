@@ -90,6 +90,7 @@ func (w *Writer) Write(it memtable.Iterator) (uint32, error) {
 		prevKey = []byte(startKey)
 
 		indexEntry := &IndexEntry{
+			Position:     uint32(len(indexBlock.IndexEntries.Entries)) + 1,
 			UnsharedKey:  []byte(startKey)[s:],
 			SharedKeyLen: uint32(s),
 			BlockHandle: &BlockHandle{
@@ -170,6 +171,7 @@ func (w *Writer) createDataBlock(it memtable.Iterator) (*DataBlock, error) {
 		prevKey = []byte(m.Key)
 
 		record := &BlockEntry{
+			Position:     uint32(len(block.DataBlockEntries.Entries)) + 1,
 			UnsharedKey:  []byte(m.Key)[s:],
 			SharedKeyLen: uint32(s),
 			Value:        []byte(m.Value.Value),
